@@ -50,6 +50,24 @@ const bookStats = (book, logs) => {
   return { currentPage, pct, startDate, endDate, days, avgPerDay, bestDay, totalLogs: bl.length };
 };
 
+
+// ─── Keyboard-aware hook ──────────────────────────────────────────────────────
+function useKeyboardHeight() {
+  const [kbHeight, setKbHeight] = useState(0);
+  useEffect(() => {
+    const onResize = () => {
+      // On mobile, window.visualViewport shrinks when keyboard appears
+      if (window.visualViewport) {
+        const gap = window.innerHeight - window.visualViewport.height;
+        setKbHeight(gap > 100 ? gap : 0);
+      }
+    };
+    window.visualViewport?.addEventListener("resize", onResize);
+    return () => window.visualViewport?.removeEventListener("resize", onResize);
+  }, []);
+  return kbHeight;
+}
+
 // ─── Styles ──────────────────────────────────────────────────────────────────
 const styles = `
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,500;0,9..144,700;1,9..144,400&family=DM+Sans:wght@300;400;500&display=swap');
@@ -100,7 +118,7 @@ body{background:var(--bg);font-family:var(--font-body);color:var(--text);-webkit
 .book-meta{font-size:12px;color:var(--text3)}
 .book-status{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:500;padding:2px 8px;border-radius:20px}
 .book-status.progress{background:var(--accent-light);color:var(--accent)}
-.book-status.done{background:var(--green-light);color:var(--green)}
+.book-status.done{background:var(--green-light);color:var(--green)}.book-status.pending{background:var(--surface2);color:var(--text3)}
 .kindle-badge{display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px;background:var(--kindle-light);color:var(--kindle)}
 .progress-row{display:flex;align-items:center;gap:8px;margin-top:4px}
 .progress-bar{flex:1;height:4px;background:var(--surface2);border-radius:2px;overflow:hidden}
@@ -155,7 +173,7 @@ body{background:var(--bg);font-family:var(--font-body);color:var(--text);-webkit
 .fab:active{transform:scale(.95)}
 .modal-overlay{position:fixed;inset:0;background:rgba(26,21,18,.45);backdrop-filter:blur(4px);z-index:200;display:flex;align-items:flex-end;justify-content:center;animation:fadeIn .2s}
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
-.modal{background:var(--surface);border-radius:20px 20px 0 0;width:100%;max-width:480px;padding:24px 20px 32px;display:flex;flex-direction:column;gap:16px;animation:slideUp .25s cubic-bezier(.34,1.56,.64,1);max-height:90vh;overflow-y:auto}
+.modal{background:var(--surface);border-radius:20px 20px 0 0;width:100%;max-width:480px;padding:24px 20px 32px;display:flex;flex-direction:column;gap:16px;animation:slideUp .25s cubic-bezier(.34,1.56,.64,1);max-height:90vh;overflow-y:auto;transition:padding-bottom .2s}
 @keyframes slideUp{from{transform:translateY(40px);opacity:0}to{transform:translateY(0);opacity:1}}
 .modal-handle{width:36px;height:4px;background:var(--surface2);border-radius:2px;margin:0 auto}
 .modal-title{font-family:var(--font-display);font-size:20px;font-weight:500;color:var(--text)}
@@ -334,6 +352,11 @@ export default function App() {
     showToast("🎉 ¡Libro finalizado!");
   };
 
+  const startBook = async (id) => {
+    await updateBook(id, { status: "progress" });
+    showToast("📖 ¡A leer!");
+  };
+
   const addLog = async (log) => {
     const bookLogs = logs.filter((l) => l.bookId === log.bookId).sort((a, b) => a.date.localeCompare(b.date));
     const lastLog = bookLogs[bookLogs.length - 1];
@@ -365,6 +388,7 @@ export default function App() {
   const streak = useMemo(() => calcStreak(logs), [logs]);
   const sortedLogs = useMemo(() => [...logs].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)), [logs]);
   const inProgress = books.filter((b) => b.status === "progress");
+  const pending = books.filter((b) => b.status === "pending");
   const finished = books.filter((b) => b.status === "done");
   const activeDays2026 = useMemo(() => {
     return new Set(logs.filter(l => l.date.startsWith("2026")).map(l => l.date)).size;
@@ -427,7 +451,7 @@ export default function App() {
             <div style={{flex:1,display:"flex",flexDirection:"column",gap:"8px"}}>
               <div style={{fontFamily:"var(--font-display)",fontSize:"18px",fontWeight:500,lineHeight:1.3}}>{book.name}</div>
               <div style={{display:"flex",gap:"6px",flexWrap:"wrap",alignItems:"center"}}>
-                <span className={`book-status ${book.status==="done"?"done":"progress"}`}>{book.status==="done"?"✓ Finalizado":"● En progreso"}</span>
+                <span className={`book-status ${book.status==="done"?"done":book.status==="progress"?"progress":"pending"}`}>{book.status==="done"?"✓ Finalizado":book.status==="progress"?"● En progreso":"◦ Sin iniciar"}</span>
                 {isKindle && <span className="kindle-badge">📱 Kindle</span>}
               </div>
               <div style={{fontSize:"12px",color:"var(--text3)"}}>{unitLabelCap(book.unit)} {stats.currentPage} / {book.totalPages||"?"}</div>
@@ -435,7 +459,8 @@ export default function App() {
                 <div className="progress-bar" style={{height:"6px"}}><div className={`progress-fill ${isKindle?"kindle":""}`} style={{width:`${stats.pct}%`}}/></div>
                 <span className={`progress-pct ${isKindle?"kindle":""}`}>{stats.pct}%</span>
               </div>
-              {book.status!=="done" && <button className="btn btn-primary btn-sm" style={{marginTop:"4px"}} onClick={() => finishBook(book.id)}>Marcar como finalizado</button>}
+              {book.status==="pending" && <button className="btn btn-primary btn-sm" style={{marginTop:"4px"}} onClick={() => startBook(book.id)}>Iniciar lectura</button>}
+              {book.status==="progress" && <button className="btn btn-secondary btn-sm" style={{marginTop:"4px"}} onClick={() => finishBook(book.id)}>Marcar como finalizado</button>}
             </div>
           </div>
           <div className="stats-grid">
@@ -552,6 +577,14 @@ export default function App() {
                   <div className="book-info"><div style={{display:"flex",alignItems:"center",gap:"6px"}}><div className="book-name" style={{flex:1}}>{book.name}</div>{isKindle&&<span className="kindle-badge">📱</span>}</div>
                   <div className="book-meta">{book.totalPages} {unitLabel(book.unit)} totales</div>
                   <div className="progress-row"><div className="progress-bar"><div className={`progress-fill ${isKindle?"kindle":""}`} style={{width:`${s.pct}%`}}/></div><span className={`progress-pct ${isKindle?"kindle":""}`}>{s.pct}%</span></div></div>
+                </div>;})}
+              </>}
+              {pending.length>0&&<><div className="section-header" style={{marginTop:"4px"}}><span className="section-title">Sin iniciar ({pending.length})</span></div>
+                {pending.map(book=>{const isKindle=book.unit==="pos";return <div key={book.id} className="card book-card" style={{marginBottom:"10px"}} onClick={()=>setDetail(book.id)}>
+                  <div className="book-cover">{book.cover?<img src={book.cover} alt=""/>:"📖"}</div>
+                  <div className="book-info"><div style={{display:"flex",alignItems:"center",gap:"6px"}}><div className="book-name" style={{flex:1}}>{book.name}</div>{isKindle&&<span className="kindle-badge">📱</span>}</div>
+                  <span className="book-status pending">◦ Sin iniciar</span>
+                  <div className="book-meta">{book.totalPages?`${book.totalPages} ${unitLabel(book.unit)} totales`:""}</div></div>
                 </div>;})}
               </>}
               {finished.length>0&&<><div className="section-header" style={{marginTop:"4px"}}><span className="section-title">Finalizados ({finished.length})</span></div>
@@ -708,14 +741,15 @@ function ActivityGrid({ logs }) {
 }
 
 function AddBookModal({ onSave, onClose, book, edit }) {
+  const kbHeight = useKeyboardHeight();
   const [name, setName] = useState(book?.name||"");
   const [pages, setPages] = useState(book?.totalPages||"");
   const [cover, setCover] = useState(book?.cover||null);
   const [unit, setUnit] = useState(book?.unit||"page");
   const handleCover = (e) => { const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=(ev)=>setCover(ev.target.result);r.readAsDataURL(f); };
   return (
-    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
-      <div className="modal">
+    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()} style={{alignItems:"flex-end"}}>
+      <div className="modal" style={{paddingBottom:`${Math.max(32, kbHeight + 16)}px`}}>
         <div className="modal-handle"/>
         <div className="modal-title">{edit?"Editar libro":"Nuevo libro"}</div>
         <div className="form-group">
@@ -745,6 +779,7 @@ function AddBookModal({ onSave, onClose, book, edit }) {
 }
 
 function AddLogModal({ books, preBookId, logs, warnLog, onConfirmWarn, onCancelWarn, onSave, onClose }) {
+  const kbHeight = useKeyboardHeight();
   const [bookId, setBookId] = useState(preBookId||(books[0]?.id||""));
   const [date, setDate] = useState(todayStr());
   const [page, setPage] = useState("");
@@ -766,8 +801,8 @@ function AddLogModal({ books, preBookId, logs, warnLog, onConfirmWarn, onCancelW
   );
 
   return (
-    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
-      <div className="modal">
+    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()} style={{alignItems:"flex-end"}}>
+      <div className="modal" style={{paddingBottom:`${Math.max(32, kbHeight + 16)}px`}}>
         <div className="modal-handle"/>
         <div className="modal-title">Registrar lectura</div>
         <div className="form-group">
