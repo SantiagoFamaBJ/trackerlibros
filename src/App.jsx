@@ -614,35 +614,45 @@ export default function App() {
 // ─── Activity Grid ────────────────────────────────────────────────────────────
 function ActivityGrid({ logs }) {
   const { weeks, months } = useMemo(() => {
-    // All days of 2026
-    const activeDates = new Set(logs.filter(l => l.date.startsWith("2026")).map(l => l.date));
+    // Build set of dates that have at least one log in 2026
+    const activeDates = new Set(
+      logs
+        .filter(l => typeof l.date === "string" && l.date.startsWith("2026"))
+        .map(l => l.date)
+    );
 
-    const days = [];
-    const start = new Date("2026-01-01");
-    const end = new Date("2026-12-31");
-    // Pad to start on Monday
-    const startPad = (start.getDay() + 6) % 7; // days to go back to reach Monday
-    for (let i = -startPad; i <= Math.ceil((end - start) / 86400000); i++) {
-      const d = new Date(start);
-      d.setDate(start.getDate() + i);
+    // Generate every day of 2026
+    const allDays = [];
+    const d = new Date("2026-01-01T12:00:00");
+    while (d.getFullYear() === 2026) {
       const key = d.toISOString().slice(0, 10);
-      const inYear = key >= "2026-01-01" && key <= "2026-12-31";
-      days.push({ date: key, active: inYear && activeDates.has(key), inYear });
+      allDays.push({ date: key, active: activeDates.has(key) });
+      d.setDate(d.getDate() + 1);
     }
 
-    // Group into weeks
-    const weeks = [];
-    for (let i = 0; i < days.length; i += 7) weeks.push(days.slice(i, i + 7));
+    // Pad front so grid starts on Monday (getDay: 0=Sun,1=Mon...6=Sat)
+    const firstDow = new Date("2026-01-01T12:00:00").getDay(); // 4 = Thursday
+    const padFront = (firstDow + 6) % 7; // days before Jan 1 to reach Monday = 3
+    const padded = [
+      ...Array(padFront).fill({ date: "", active: false, inYear: false }),
+      ...allDays.map(d => ({ ...d, inYear: true })),
+    ];
+    // Pad end to complete last week
+    while (padded.length % 7 !== 0) padded.push({ date: "", active: false, inYear: false });
 
-    // Month labels
+    // Group into weeks of 7
+    const weeks = [];
+    for (let i = 0; i < padded.length; i += 7) weeks.push(padded.slice(i, i + 7));
+
+    // Month labels — one per month, placed at the first week column of that month
     const months = [];
     let lastMonth = -1;
     weeks.forEach((week, wi) => {
-      const firstInYear = week.find(d => d.inYear);
-      if (!firstInYear) return;
-      const m = new Date(firstInYear.date + "T00:00:00").getMonth();
+      const firstReal = week.find(d => d.inYear);
+      if (!firstReal) return;
+      const m = new Date(firstReal.date + "T12:00:00").getMonth();
       if (m !== lastMonth) {
-        months.push({ col: wi, label: new Date(firstInYear.date + "T00:00:00").toLocaleDateString("es-AR", { month: "short" }) });
+        months.push({ col: wi, label: new Date(firstReal.date + "T12:00:00").toLocaleDateString("es-AR", { month: "short" }) });
         lastMonth = m;
       }
     });
