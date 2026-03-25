@@ -126,6 +126,9 @@ body{background:var(--bg);font-family:var(--font-body);color:var(--text);-webkit
 .stat-card.accent .stat-value,.stat-card.accent .stat-label{color:white}
 .stat-card.accent2{background:var(--accent2);border-color:var(--accent2)}
 .stat-card.accent2 .stat-value,.stat-card.accent2 .stat-label{color:white}
+.stat-card.kindle{background:var(--kindle-light);border-color:var(--kindle-light)}
+.stat-card.kindle .stat-value{color:var(--kindle)}
+.stat-card.kindle .stat-label{color:var(--kindle)}
 .form-group{display:flex;flex-direction:column;gap:6px}
 .form-label{font-size:11px;font-weight:500;color:var(--text3);letter-spacing:.5px;text-transform:uppercase}
 .form-input{background:var(--surface2);border:1.5px solid transparent;border-radius:var(--r-sm);padding:12px 14px;font-family:var(--font-body);font-size:15px;color:var(--text);outline:none;transition:border-color .15s,background .15s;width:100%}
@@ -365,15 +368,24 @@ export default function App() {
   const sortedLogs = useMemo(() => [...logs].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)), [logs]);
   const inProgress = books.filter((b) => b.status === "progress");
   const finished = books.filter((b) => b.status === "done");
-  const bestDay = useMemo(() => {
-    const byDate = {}, byBook = {};
+  const { bestDayPages, bestDayPos } = useMemo(() => {
+    const byDatePages = {}, byDatePos = {}, byBook = {};
     logs.forEach((l) => { if (!byBook[l.bookId]) byBook[l.bookId] = []; byBook[l.bookId].push(l); });
     Object.values(byBook).forEach((bl) => {
+      const book = books.find(b => b.id === bl[0]?.bookId);
+      const isPos = book?.unit === "pos";
       bl.sort((a, b) => a.date.localeCompare(b.date));
-      bl.forEach((l, i) => { const p = i === 0 ? l.page : Math.max(0, l.page - bl[i-1].page); byDate[l.date] = (byDate[l.date]||0)+p; });
+      bl.forEach((l, i) => {
+        const p = i === 0 ? l.page : Math.max(0, l.page - bl[i-1].page);
+        if (isPos) byDatePos[l.date] = (byDatePos[l.date]||0)+p;
+        else byDatePages[l.date] = (byDatePages[l.date]||0)+p;
+      });
     });
-    return Math.max(0, ...Object.values(byDate));
-  }, [logs]);
+    return {
+      bestDayPages: Math.max(0, ...Object.values(byDatePages)),
+      bestDayPos: Math.max(0, ...Object.values(byDatePos)),
+    };
+  }, [logs, books]);
 
   // ── Render guards ──
   if (session === undefined) return <div className="app"><style>{styles}</style><div className="loading"><div className="spinner"/></div></div>;
@@ -550,8 +562,10 @@ export default function App() {
             <div className="stat-card"><div className="stat-value">{finished.length}</div><div className="stat-label">Libros terminados</div></div>
             <div className="stat-card"><div className="stat-value">{books.length}</div><div className="stat-label">Total de libros</div></div>
             <div className="stat-card"><div className="stat-value">{logs.length}</div><div className="stat-label">Sesiones</div></div>
-            <div className="stat-card"><div className="stat-value">{bestDay||"—"}</div><div className="stat-label">Mejor día</div></div>
+            {bestDayPages>0&&<div className="stat-card"><div className="stat-value">{bestDayPages}</div><div className="stat-label">Mejor día 📄 pág.</div></div>}
+            {bestDayPos>0&&<div className="stat-card kindle"><div className="stat-value">{bestDayPos}</div><div className="stat-label">Mejor día 📱 pos.</div></div>}
           </div>
+          {logs.length>0&&<ActivityGrid logs={logs} books={books}/>}
           {books.length>0&&<><div className="section-header" style={{marginTop:"4px"}}><span className="section-title">Por libro</span></div>
             {books.map(book=>{const s=bookStats(book,logs);if(s.totalLogs===0)return null;const isKindle=book.unit==="pos";return <div key={book.id} className="card card-sm" style={{display:"flex",gap:"10px",alignItems:"center",cursor:"pointer",marginBottom:"8px"}} onClick={()=>setDetail(book.id)}>
               <div className="book-cover" style={{width:40,height:56,fontSize:18}}>{book.cover?<img src={book.cover} alt=""/>:"📖"}</div>
@@ -581,6 +595,114 @@ export default function App() {
 }
 
 // ─── Modals ───────────────────────────────────────────────────────────────────
+
+// ─── Activity Grid ────────────────────────────────────────────────────────────
+function ActivityGrid({ logs, books }) {
+  const data = useMemo(() => {
+    // Build a map of date -> total units read (pages or pos, all combined)
+    const byBook = {};
+    logs.forEach((l) => { if (!byBook[l.bookId]) byBook[l.bookId] = []; byBook[l.bookId].push(l); });
+    const byDate = {};
+    Object.values(byBook).forEach((bl) => {
+      bl.sort((a, b) => a.date.localeCompare(b.date));
+      bl.forEach((l, i) => {
+        const p = i === 0 ? l.page : Math.max(0, l.page - bl[i-1].page);
+        if (p > 0) byDate[l.date] = (byDate[l.date] || 0) + p;
+      });
+    });
+
+    // Build 52 weeks x 7 days grid ending today
+    const today = new Date();
+    const days = [];
+    for (let i = 363; i >= 0; i--) {
+      const d = new Date(today);
+      d.setDate(today.getDate() - i);
+      const key = d.toISOString().slice(0, 10);
+      days.push({ date: key, count: byDate[key] || 0 });
+    }
+
+    // Find max for intensity scaling
+    const max = Math.max(1, ...days.map(d => d.count));
+    return { days, max };
+  }, [logs, books]);
+
+  const intensity = (count) => {
+    if (count === 0) return 0;
+    const pct = count / data.max;
+    if (pct < 0.25) return 1;
+    if (pct < 0.5) return 2;
+    if (pct < 0.75) return 3;
+    return 4;
+  };
+
+  const colors = [
+    "var(--surface2)",      // 0 - empty
+    "#F2DDD0",              // 1 - light
+    "#E0A882",              // 2
+    "#C4602A",              // 3
+    "#8B3D17",              // 4 - max
+  ];
+
+  // Month labels — one per 4-5 week block
+  const months = [];
+  let lastMonth = -1;
+  data.days.forEach((d, i) => {
+    const m = new Date(d.date + "T00:00:00").getMonth();
+    const col = Math.floor(i / 7);
+    if (m !== lastMonth) { months.push({ col, label: new Date(d.date + "T00:00:00").toLocaleDateString("es-AR", { month: "short" }) }); lastMonth = m; }
+  });
+
+  const weeks = [];
+  for (let w = 0; w < 52; w++) weeks.push(data.days.slice(w * 7, w * 7 + 7));
+
+  const dayLabels = ["", "L", "", "M", "", "V", ""];
+
+  return (
+    <div className="card" style={{overflowX:"auto"}}>
+      <div style={{fontSize:"11px",fontWeight:500,color:"var(--text3)",textTransform:"uppercase",letterSpacing:".8px",marginBottom:"10px"}}>Actividad — último año</div>
+      <div style={{display:"flex",gap:"0px"}}>
+        {/* Day labels */}
+        <div style={{display:"flex",flexDirection:"column",gap:"2px",marginRight:"4px",paddingTop:"18px"}}>
+          {dayLabels.map((l, i) => <div key={i} style={{height:"10px",fontSize:"8px",color:"var(--text3)",lineHeight:"10px",width:"10px",textAlign:"right"}}>{l}</div>)}
+        </div>
+        {/* Grid */}
+        <div style={{flex:1,minWidth:0}}>
+          {/* Month labels */}
+          <div style={{display:"flex",marginBottom:"4px",height:"14px",position:"relative"}}>
+            {months.map((m, i) => (
+              <div key={i} style={{position:"absolute",left:`${m.col * 12}px`,fontSize:"9px",color:"var(--text3)",whiteSpace:"nowrap"}}>{m.label}</div>
+            ))}
+          </div>
+          {/* Cells */}
+          <div style={{display:"flex",gap:"2px"}}>
+            {weeks.map((week, wi) => (
+              <div key={wi} style={{display:"flex",flexDirection:"column",gap:"2px"}}>
+                {week.map((day, di) => (
+                  <div key={di}
+                    title={day.count > 0 ? `${day.date}: ${day.count} unidades` : day.date}
+                    style={{
+                      width:"10px", height:"10px", borderRadius:"2px",
+                      background: colors[intensity(day.count)],
+                      transition:"background .1s",
+                      cursor: day.count > 0 ? "pointer" : "default",
+                    }}
+                  />
+                ))}
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      {/* Legend */}
+      <div style={{display:"flex",alignItems:"center",gap:"4px",marginTop:"10px",justifyContent:"flex-end"}}>
+        <span style={{fontSize:"9px",color:"var(--text3)"}}>Menos</span>
+        {colors.map((c, i) => <div key={i} style={{width:"10px",height:"10px",borderRadius:"2px",background:c}}/>)}
+        <span style={{fontSize:"9px",color:"var(--text3)"}}>Más</span>
+      </div>
+    </div>
+  );
+}
+
 function AddBookModal({ onSave, onClose, book, edit }) {
   const [name, setName] = useState(book?.name||"");
   const [pages, setPages] = useState(book?.totalPages||"");
