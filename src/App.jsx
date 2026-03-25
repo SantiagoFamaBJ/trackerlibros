@@ -7,13 +7,19 @@ const fmt = (d) => new Date(d + "T00:00:00").toLocaleDateString("es-AR", { day: 
 const fmtShort = (d) => new Date(d + "T00:00:00").toLocaleDateString("es-AR", { day: "2-digit", month: "short" });
 const uid = () => Math.random().toString(36).slice(2, 9);
 
-// Supabase returns snake_case — normalize to camelCase for the app
+const unitLabel = (unit) => unit === "pos" ? "pos." : "pág.";
+const unitLabelCap = (unit) => unit === "pos" ? "Pos." : "Pág.";
+const unitPlaceholder = (unit) => unit === "pos" ? "ej. 1240" : "ej. 120";
+const unitTotalLabel = (unit) => unit === "pos" ? "Total de posiciones" : "Total de páginas";
+const unitInputLabel = (unit) => unit === "pos" ? "Posición" : "Página";
+
 const normalizeBook = (b) => ({
   id: b.id,
   name: b.name,
   totalPages: b.total_pages,
   cover: b.cover,
   status: b.status,
+  unit: b.unit || "page",
   finishedAt: b.finished_at,
   createdAt: b.created_at,
 });
@@ -66,6 +72,7 @@ const styles = `
   --accent:#C4602A;--accent-light:#F2DDD0;--accent2:#2A6B5E;--accent2-light:#D0EDE8;
   --green:#3B8A5A;--green-light:#D6EFE1;--danger:#B03030;
   --warning:#C4862A;--warning-light:#FBF0D8;
+  --kindle:#6B52A8;--kindle-light:#EDE8F8;
   --shadow:0 2px 12px rgba(60,40,20,.08);--shadow-md:0 4px 24px rgba(60,40,20,.12);
   --r:14px;--r-sm:8px;
   --font-display:'Fraunces',Georgia,serif;--font-body:'DM Sans',system-ui,sans-serif;
@@ -95,17 +102,22 @@ body{background:var(--bg);font-family:var(--font-body);color:var(--text);-webkit
 .book-status{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:500;padding:2px 8px;border-radius:20px}
 .book-status.progress{background:var(--accent-light);color:var(--accent)}
 .book-status.done{background:var(--green-light);color:var(--green)}
+.kindle-badge{display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px;background:var(--kindle-light);color:var(--kindle)}
 .progress-row{display:flex;align-items:center;gap:8px;margin-top:4px}
 .progress-bar{flex:1;height:4px;background:var(--surface2);border-radius:2px;overflow:hidden}
 .progress-fill{height:100%;background:var(--accent);border-radius:2px;transition:width .5s ease}
+.progress-fill.kindle{background:var(--kindle)}
 .progress-pct{font-size:11px;font-weight:500;color:var(--accent);min-width:32px;text-align:right}
+.progress-pct.kindle{color:var(--kindle)}
 .log-item{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border)}
 .log-item:last-child{border-bottom:none}
 .log-dot{width:8px;height:8px;border-radius:50%;background:var(--accent);flex-shrink:0}
+.log-dot.kindle{background:var(--kindle)}
 .log-main{flex:1;min-width:0}
 .log-book{font-size:13px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .log-date{font-size:11px;color:var(--text3);margin-top:1px}
 .log-page{font-family:var(--font-display);font-size:15px;font-weight:500;color:var(--accent)}
+.log-page.kindle{color:var(--kindle)}
 .log-actions{display:flex;gap:4px}
 .stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .stat-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-sm);padding:14px}
@@ -121,6 +133,10 @@ body{background:var(--bg);font-family:var(--font-body);color:var(--text);-webkit
 .form-input:focus{border-color:var(--accent);background:var(--surface)}
 .form-input::placeholder{color:var(--text3)}
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.unit-toggle{display:grid;grid-template-columns:1fr 1fr;gap:4px;background:var(--surface2);border-radius:var(--r-sm);padding:4px}
+.unit-option{padding:9px;text-align:center;border-radius:6px;cursor:pointer;font-size:13px;font-weight:500;color:var(--text2);transition:all .15s;border:none;background:transparent}
+.unit-option.active{background:var(--surface);color:var(--text);box-shadow:0 1px 4px rgba(60,40,20,.10)}
+.unit-option.kindle-active{background:var(--kindle);color:white}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:none;border-radius:var(--r-sm);padding:13px 20px;font-family:var(--font-body);font-size:14px;font-weight:500;cursor:pointer;transition:all .15s;width:100%}
 .btn-primary{background:var(--accent);color:white}
 .btn-primary:hover{background:#A8501F}
@@ -177,7 +193,6 @@ body{background:var(--bg);font-family:var(--font-body);color:var(--text);-webkit
 ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
 `;
 
-// ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
   const [books, setBooks] = useState([]);
   const [logs, setLogs] = useState([]);
@@ -192,7 +207,6 @@ export default function App() {
   const [warnLog, setWarnLog] = useState(null);
   const toastTimer = useRef(null);
 
-  // ── Load data from Supabase ──
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
@@ -200,26 +214,20 @@ export default function App() {
         supabase.from("books").select("*").order("created_at"),
         supabase.from("logs").select("*").order("date"),
       ]);
-      if (booksErr || logsErr) {
-        setError(booksErr?.message || logsErr?.message);
-      } else {
-        setBooks((booksData || []).map(normalizeBook));
-        setLogs((logsData || []).map(normalizeLog));
-      }
+      if (booksErr || logsErr) { setError(booksErr?.message || logsErr?.message); }
+      else { setBooks((booksData || []).map(normalizeBook)); setLogs((logsData || []).map(normalizeLog)); }
       setLoading(false);
     };
     fetchData();
   }, []);
 
   const showToast = (msg) => {
-    setToast(msg);
-    clearTimeout(toastTimer.current);
+    setToast(msg); clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(null), 2500);
   };
 
-  // ── CRUD ──
   const addBook = async (book) => {
-    const newBook = { id: uid(), name: book.name, total_pages: book.totalPages, cover: book.cover || null, status: "progress", finished_at: null, created_at: todayStr() };
+    const newBook = { id: uid(), name: book.name, total_pages: book.totalPages, cover: book.cover || null, status: "progress", unit: book.unit || "page", finished_at: null, created_at: todayStr() };
     const { error } = await supabase.from("books").insert(newBook);
     if (error) { showToast("❌ Error al guardar"); return; }
     setBooks((prev) => [...prev, normalizeBook(newBook)]);
@@ -232,6 +240,7 @@ export default function App() {
     if (patch.totalPages !== undefined) dbPatch.total_pages = patch.totalPages;
     if (patch.cover !== undefined) dbPatch.cover = patch.cover;
     if (patch.status !== undefined) dbPatch.status = patch.status;
+    if (patch.unit !== undefined) dbPatch.unit = patch.unit;
     if (patch.finishedAt !== undefined) dbPatch.finished_at = patch.finishedAt;
     const { error } = await supabase.from("books").update(dbPatch).eq("id", id);
     if (error) { showToast("❌ Error al actualizar"); return; }
@@ -248,8 +257,7 @@ export default function App() {
   };
 
   const finishBook = async (id) => {
-    const patch = { status: "done", finishedAt: todayStr() };
-    await updateBook(id, patch);
+    await updateBook(id, { status: "done", finishedAt: todayStr() });
     showToast("🎉 ¡Libro finalizado!");
   };
 
@@ -262,7 +270,6 @@ export default function App() {
     if (error) { showToast("❌ Error al guardar"); return; }
     setLogs((prev) => [...prev, normalizeLog(newLog)]);
     showToast("✅ Lectura registrada"); setModal(null); setWarnLog(null); setEditTarget(null);
-    // auto-finish
     const book = books.find((b) => b.id === log.bookId);
     if (book && book.totalPages && log.page >= book.totalPages && book.status !== "done") finishBook(book.id);
   };
@@ -281,7 +288,6 @@ export default function App() {
     showToast("🗑️ Registro eliminado");
   };
 
-  // ── Derived ──
   const streak = useMemo(() => calcStreak(logs), [logs]);
   const sortedLogs = useMemo(() => [...logs].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)), [logs]);
   const inProgress = books.filter((b) => b.status === "progress");
@@ -291,43 +297,23 @@ export default function App() {
     logs.forEach((l) => { if (!byBook[l.bookId]) byBook[l.bookId] = []; byBook[l.bookId].push(l); });
     Object.values(byBook).forEach((bl) => {
       bl.sort((a, b) => a.date.localeCompare(b.date));
-      bl.forEach((l, i) => {
-        const pages = i === 0 ? l.page : Math.max(0, l.page - bl[i - 1].page);
-        byDate[l.date] = (byDate[l.date] || 0) + pages;
-      });
+      bl.forEach((l, i) => { const p = i === 0 ? l.page : Math.max(0, l.page - bl[i-1].page); byDate[l.date] = (byDate[l.date]||0)+p; });
     });
     return Math.max(0, ...Object.values(byDate));
   }, [logs]);
 
-  // ── Loading / Error ──
-  if (loading) return (
-    <div className="app">
-      <style>{styles}</style>
-      <div className="loading"><div className="spinner"/><span>Cargando tu biblioteca…</span></div>
-    </div>
-  );
+  if (loading) return <div className="app"><style>{styles}</style><div className="loading"><div className="spinner"/><span>Cargando tu biblioteca…</span></div></div>;
+  if (error) return <div className="app"><style>{styles}</style><div className="loading"><div style={{fontSize:"32px"}}>⚠️</div><div style={{color:"var(--danger)",fontWeight:500}}>Error de conexión</div><div style={{fontSize:"12px",maxWidth:"260px",textAlign:"center"}}>{error}</div></div></div>;
 
-  if (error) return (
-    <div className="app">
-      <style>{styles}</style>
-      <div className="loading">
-        <div style={{fontSize:'32px'}}>⚠️</div>
-        <div style={{color:'var(--danger)',fontWeight:500}}>Error de conexión</div>
-        <div style={{fontSize:'12px',maxWidth:'260px',textAlign:'center'}}>{error}</div>
-        <div style={{fontSize:'12px',color:'var(--text3)',marginTop:'8px'}}>Verificá las variables de entorno VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY</div>
-      </div>
-    </div>
-  );
-
-  // ── Detail view ──
   if (detail) {
     const book = books.find((b) => b.id === detail);
     if (!book) { setDetail(null); return null; }
     const stats = bookStats(book, logs);
     const bookLogs = sortedLogs.filter((l) => l.bookId === book.id);
+    const isKindle = book.unit === "pos";
+    const ul = unitLabel(book.unit);
     return (
-      <div className="app">
-        <style>{styles}</style>
+      <div className="app"><style>{styles}</style>
         <div className="detail-header">
           <button className="detail-back" onClick={() => setDetail(null)}>←</button>
           <span className="detail-title">{book.name}</span>
@@ -338,25 +324,28 @@ export default function App() {
             <div className="detail-cover-lg">{book.cover ? <img src={book.cover} alt=""/> : "📖"}</div>
             <div style={{flex:1,display:"flex",flexDirection:"column",gap:"8px"}}>
               <div style={{fontFamily:"var(--font-display)",fontSize:"18px",fontWeight:500,lineHeight:1.3}}>{book.name}</div>
-              <span className={`book-status ${book.status === "done" ? "done" : "progress"}`}>{book.status === "done" ? "✓ Finalizado" : "● En progreso"}</span>
-              <div style={{fontSize:"12px",color:"var(--text3)"}}>Pág. {stats.currentPage} / {book.totalPages || "?"}</div>
-              <div className="progress-row">
-                <div className="progress-bar" style={{height:"6px"}}><div className="progress-fill" style={{width:`${stats.pct}%`}}/></div>
-                <span className="progress-pct">{stats.pct}%</span>
+              <div style={{display:"flex",gap:"6px",flexWrap:"wrap",alignItems:"center"}}>
+                <span className={`book-status ${book.status==="done"?"done":"progress"}`}>{book.status==="done"?"✓ Finalizado":"● En progreso"}</span>
+                {isKindle && <span className="kindle-badge">📱 Kindle</span>}
               </div>
-              {book.status !== "done" && <button className="btn btn-primary btn-sm" style={{marginTop:"4px"}} onClick={() => finishBook(book.id)}>Marcar como finalizado</button>}
+              <div style={{fontSize:"12px",color:"var(--text3)"}}>{unitLabelCap(book.unit)} {stats.currentPage} / {book.totalPages||"?"}</div>
+              <div className="progress-row">
+                <div className="progress-bar" style={{height:"6px"}}><div className={`progress-fill ${isKindle?"kindle":""}`} style={{width:`${stats.pct}%`}}/></div>
+                <span className={`progress-pct ${isKindle?"kindle":""}`}>{stats.pct}%</span>
+              </div>
+              {book.status!=="done" && <button className="btn btn-primary btn-sm" style={{marginTop:"4px"}} onClick={() => finishBook(book.id)}>Marcar como finalizado</button>}
             </div>
           </div>
           <div className="stats-grid">
-            <div className="stat-card"><div className="stat-value" style={{fontSize:"14px",fontWeight:500}}>{stats.startDate ? fmtShort(stats.startDate) : "—"}</div><div className="stat-label">Inicio</div></div>
-            <div className="stat-card"><div className="stat-value" style={{fontSize:"14px",fontWeight:500}}>{stats.endDate ? fmtShort(stats.endDate) : "—"}</div><div className="stat-label">Finalización</div></div>
-            <div className="stat-card"><div className="stat-value">{stats.days || "—"}</div><div className="stat-label">Días</div></div>
-            <div className="stat-card"><div className="stat-value">{stats.avgPerDay || "—"}</div><div className="stat-label">Pág. por día</div></div>
+            <div className="stat-card"><div className="stat-value" style={{fontSize:"14px",fontWeight:500}}>{stats.startDate?fmtShort(stats.startDate):"—"}</div><div className="stat-label">Inicio</div></div>
+            <div className="stat-card"><div className="stat-value" style={{fontSize:"14px",fontWeight:500}}>{stats.endDate?fmtShort(stats.endDate):"—"}</div><div className="stat-label">Finalización</div></div>
+            <div className="stat-card"><div className="stat-value">{stats.days||"—"}</div><div className="stat-label">Días</div></div>
+            <div className="stat-card"><div className="stat-value">{stats.avgPerDay||"—"}</div><div className="stat-label">{ul}/día</div></div>
           </div>
-          {stats.bestDay.pages > 0 && (
+          {stats.bestDay.pages>0 && (
             <div className="card card-sm" style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <div><div style={{fontSize:"11px",color:"var(--text3)",textTransform:"uppercase",letterSpacing:".5px",marginBottom:"2px"}}>Mejor día</div>
-              <div style={{fontFamily:"var(--font-display)",fontSize:"22px",fontWeight:500}}>{stats.bestDay.pages} <span style={{fontSize:"12px",fontWeight:400,color:"var(--text3)"}}>páginas</span></div></div>
+              <div style={{fontFamily:"var(--font-display)",fontSize:"22px",fontWeight:500,color:isKindle?"var(--kindle)":"var(--accent)"}}>{stats.bestDay.pages} <span style={{fontSize:"12px",fontWeight:400,color:"var(--text3)"}}>{ul}</span></div></div>
               <div style={{fontSize:"12px",color:"var(--text3)"}}>{fmtShort(stats.bestDay.date)}</div>
             </div>
           )}
@@ -365,14 +354,14 @@ export default function App() {
               <span className="section-title">Historial del libro</span>
               <button className="btn-ghost btn-sm" onClick={() => { setEditTarget({bookId:book.id}); setModal("addLog"); }}>+ Registro</button>
             </div>
-            {bookLogs.length === 0
+            {bookLogs.length===0
               ? <div style={{textAlign:"center",padding:"24px",color:"var(--text3)",fontSize:"13px"}}>Sin registros aún</div>
               : <div className="card" style={{padding:"8px 16px"}}>
                   {bookLogs.map((l) => (
                     <div key={l.id} className="log-item">
-                      <div className="log-dot"/>
+                      <div className={`log-dot ${isKindle?"kindle":""}`}/>
                       <div className="log-main"><div className="log-date">{fmt(l.date)}</div></div>
-                      <div className="log-page">p.{l.page}</div>
+                      <div className={`log-page ${isKindle?"kindle":""}`}>{ul}{l.page}</div>
                       {adminMode && <div className="log-actions">
                         <button className="btn-icon" onClick={() => { setEditTarget(l); setModal("editLog"); }}>✏️</button>
                         <button className="btn-icon danger" onClick={() => deleteLog(l.id)}>🗑</button>
@@ -385,79 +374,62 @@ export default function App() {
           {adminMode && <button className="btn btn-danger btn-sm" onClick={() => { if(confirm("¿Eliminar este libro y todos sus registros?")) deleteBook(book.id); }}>🗑 Eliminar libro</button>}
           <div style={{height:"80px"}}/>
         </div>
-        {modal === "editBook" && <AddBookModal book={editTarget} onSave={(b) => updateBook(editTarget.id, b)} onClose={() => setModal(null)} edit/>}
-        {modal === "editLog" && <EditLogModal log={editTarget} books={books} onSave={(p) => updateLog(editTarget.id, p)} onClose={() => { setModal(null); setEditTarget(null); }}/>}
+        {modal==="editBook" && <AddBookModal book={editTarget} onSave={(b)=>updateBook(editTarget.id,b)} onClose={()=>setModal(null)} edit/>}
+        {modal==="editLog" && <EditLogModal log={editTarget} books={books} onSave={(p)=>updateLog(editTarget.id,p)} onClose={()=>{setModal(null);setEditTarget(null);}}/>}
         {toast && <div className="toast">{toast}</div>}
       </div>
     );
   }
 
   return (
-    <div className="app">
-      <style>{styles}</style>
+    <div className="app"><style>{styles}</style>
       <div className="nav">
         <div className="nav-logo">Libros<span>.</span></div>
         <div className="nav-actions">
-          <button className={`nav-btn ${adminMode ? "active" : ""}`} onClick={() => setAdminMode((v) => !v)} title="Modo admin">⚙️</button>
+          <button className={`nav-btn ${adminMode?"active":""}`} onClick={()=>setAdminMode(v=>!v)}>⚙️</button>
         </div>
       </div>
       <div className="tab-bar">
-        {[["home","Inicio"],["books","Biblioteca"],["stats","Estadísticas"]].map(([id,label]) => (
-          <button key={id} className={`tab ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>{label}</button>
+        {[["home","Inicio"],["books","Biblioteca"],["stats","Estadísticas"]].map(([id,label])=>(
+          <button key={id} className={`tab ${tab===id?"active":""}`} onClick={()=>setTab(id)}>{label}</button>
         ))}
       </div>
-      {adminMode && (
-        <div style={{background:"var(--warning-light)",borderBottom:"1px solid #E8C070",padding:"8px 16px",display:"flex",alignItems:"center",gap:"8px",fontSize:"12px",color:"var(--warning)"}}>
-          ⚙️ <strong>Modo administración activo</strong>
-        </div>
-      )}
+      {adminMode && <div style={{background:"var(--warning-light)",borderBottom:"1px solid #E8C070",padding:"8px 16px",display:"flex",alignItems:"center",gap:"8px",fontSize:"12px",color:"var(--warning)"}}>⚙️ <strong>Modo administración activo</strong></div>}
 
-      {tab === "home" && (
+      {tab==="home" && (
         <div className="content">
-          {logs.length > 0 && (
-            <div className="streak-banner">
-              <div className="streak-icon">🔥</div>
-              <div><div className="streak-num">{streak.current}</div><div className="streak-label">días consecutivos</div></div>
-              <div className="streak-best"><span>Mejor racha</span><strong>{streak.best}</strong></div>
-            </div>
-          )}
-          {inProgress.length > 0 && (
-            <div>
-              <div className="section-header"><span className="section-title">En progreso</span></div>
-              {inProgress.map((book) => {
-                const s = bookStats(book, logs);
-                return (
-                  <div key={book.id} className="card book-card" style={{marginBottom:"10px"}} onClick={() => setDetail(book.id)}>
-                    <div className="book-cover">{book.cover ? <img src={book.cover} alt=""/> : "📖"}</div>
-                    <div className="book-info">
-                      <div className="book-name">{book.name}</div>
-                      <div className="book-meta">Pág. {s.currentPage} / {book.totalPages || "?"}</div>
-                      <div className="progress-row"><div className="progress-bar"><div className="progress-fill" style={{width:`${s.pct}%`}}/></div><span className="progress-pct">{s.pct}%</span></div>
-                      {s.startDate && <div className="book-meta" style={{marginTop:"2px"}}>Desde {fmtShort(s.startDate)}</div>}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+          {logs.length>0 && <div className="streak-banner"><div className="streak-icon">🔥</div><div><div className="streak-num">{streak.current}</div><div className="streak-label">días consecutivos</div></div><div className="streak-best"><span>Mejor racha</span><strong>{streak.best}</strong></div></div>}
+          {inProgress.length>0 && <div>
+            <div className="section-header"><span className="section-title">En progreso</span></div>
+            {inProgress.map((book)=>{
+              const s=bookStats(book,logs); const isKindle=book.unit==="pos";
+              return <div key={book.id} className="card book-card" style={{marginBottom:"10px"}} onClick={()=>setDetail(book.id)}>
+                <div className="book-cover">{book.cover?<img src={book.cover} alt=""/>:"📖"}</div>
+                <div className="book-info">
+                  <div style={{display:"flex",alignItems:"center",gap:"6px"}}><div className="book-name" style={{flex:1}}>{book.name}</div>{isKindle&&<span className="kindle-badge">📱</span>}</div>
+                  <div className="book-meta">{unitLabelCap(book.unit)} {s.currentPage} / {book.totalPages||"?"}</div>
+                  <div className="progress-row"><div className="progress-bar"><div className={`progress-fill ${isKindle?"kindle":""}`} style={{width:`${s.pct}%`}}/></div><span className={`progress-pct ${isKindle?"kindle":""}`}>{s.pct}%</span></div>
+                  {s.startDate&&<div className="book-meta" style={{marginTop:"2px"}}>Desde {fmtShort(s.startDate)}</div>}
+                </div>
+              </div>;
+            })}
+          </div>}
           <div>
             <div className="section-header"><span className="section-title">Historial reciente</span></div>
-            {sortedLogs.length === 0
-              ? <div className="empty"><div className="empty-icon">📖</div><div className="empty-title">Sin registros aún</div><div className="empty-sub">Agregá tu primer libro y empezá a registrar</div></div>
+            {sortedLogs.length===0
+              ? <div className="empty"><div className="empty-icon">📖</div><div className="empty-title">Sin registros aún</div><div className="empty-sub">Agregá tu primer libro</div></div>
               : <div className="card" style={{padding:"8px 16px"}}>
-                  {sortedLogs.slice(0, 20).map((l) => {
-                    const book = books.find((b) => b.id === l.bookId);
-                    return (
-                      <div key={l.id} className="log-item">
-                        <div className="log-dot"/>
-                        <div className="log-main"><div className="log-book">{book?.name || "Libro eliminado"}</div><div className="log-date">{fmt(l.date)}</div></div>
-                        <div className="log-page">p.{l.page}</div>
-                        {adminMode && <div className="log-actions">
-                          <button className="btn-icon" onClick={e=>{e.stopPropagation();setEditTarget(l);setModal("editLog");}}>✏️</button>
-                          <button className="btn-icon danger" onClick={e=>{e.stopPropagation();deleteLog(l.id);}}>🗑</button>
-                        </div>}
-                      </div>
-                    );
+                  {sortedLogs.slice(0,20).map((l)=>{
+                    const book=books.find(b=>b.id===l.bookId); const isKindle=book?.unit==="pos"; const ul=unitLabel(book?.unit);
+                    return <div key={l.id} className="log-item">
+                      <div className={`log-dot ${isKindle?"kindle":""}`}/>
+                      <div className="log-main"><div className="log-book">{book?.name||"Libro eliminado"}</div><div className="log-date">{fmt(l.date)}</div></div>
+                      <div className={`log-page ${isKindle?"kindle":""}`}>{ul}{l.page}</div>
+                      {adminMode&&<div className="log-actions">
+                        <button className="btn-icon" onClick={e=>{e.stopPropagation();setEditTarget(l);setModal("editLog");}}>✏️</button>
+                        <button className="btn-icon danger" onClick={e=>{e.stopPropagation();deleteLog(l.id);}}>🗑</button>
+                      </div>}
+                    </div>;
                   })}
                 </div>
             }
@@ -466,42 +438,26 @@ export default function App() {
         </div>
       )}
 
-      {tab === "books" && (
+      {tab==="books" && (
         <div className="content">
-          {books.length === 0
+          {books.length===0
             ? <div className="empty"><div className="empty-icon">📚</div><div className="empty-title">Sin libros</div><div className="empty-sub">Agregá tu primer libro</div></div>
             : <>
-              {inProgress.length > 0 && <>
-                <div className="section-header"><span className="section-title">En progreso ({inProgress.length})</span></div>
-                {inProgress.map((book) => {
-                  const s = bookStats(book, logs);
-                  return (
-                    <div key={book.id} className="card book-card" style={{marginBottom:"10px"}} onClick={() => setDetail(book.id)}>
-                      <div className="book-cover">{book.cover ? <img src={book.cover} alt=""/> : "📖"}</div>
-                      <div className="book-info">
-                        <div className="book-name">{book.name}</div>
-                        <div className="book-meta">{book.totalPages} páginas totales</div>
-                        <div className="progress-row"><div className="progress-bar"><div className="progress-fill" style={{width:`${s.pct}%`}}/></div><span className="progress-pct">{s.pct}%</span></div>
-                      </div>
-                    </div>
-                  );
-                })}
+              {inProgress.length>0&&<><div className="section-header"><span className="section-title">En progreso ({inProgress.length})</span></div>
+                {inProgress.map(book=>{const s=bookStats(book,logs);const isKindle=book.unit==="pos";return <div key={book.id} className="card book-card" style={{marginBottom:"10px"}} onClick={()=>setDetail(book.id)}>
+                  <div className="book-cover">{book.cover?<img src={book.cover} alt=""/>:"📖"}</div>
+                  <div className="book-info"><div style={{display:"flex",alignItems:"center",gap:"6px"}}><div className="book-name" style={{flex:1}}>{book.name}</div>{isKindle&&<span className="kindle-badge">📱</span>}</div>
+                  <div className="book-meta">{book.totalPages} {unitLabel(book.unit)} totales</div>
+                  <div className="progress-row"><div className="progress-bar"><div className={`progress-fill ${isKindle?"kindle":""}`} style={{width:`${s.pct}%`}}/></div><span className={`progress-pct ${isKindle?"kindle":""}`}>{s.pct}%</span></div></div>
+                </div>;})}
               </>}
-              {finished.length > 0 && <>
-                <div className="section-header" style={{marginTop:"4px"}}><span className="section-title">Finalizados ({finished.length})</span></div>
-                {finished.map((book) => {
-                  const s = bookStats(book, logs);
-                  return (
-                    <div key={book.id} className="card book-card" style={{marginBottom:"10px"}} onClick={() => setDetail(book.id)}>
-                      <div className="book-cover">{book.cover ? <img src={book.cover} alt=""/> : "📖"}</div>
-                      <div className="book-info">
-                        <div className="book-name">{book.name}</div>
-                        <span className="book-status done">✓ Finalizado</span>
-                        <div className="book-meta">{s.days} días · {s.avgPerDay} pág/día</div>
-                      </div>
-                    </div>
-                  );
-                })}
+              {finished.length>0&&<><div className="section-header" style={{marginTop:"4px"}}><span className="section-title">Finalizados ({finished.length})</span></div>
+                {finished.map(book=>{const s=bookStats(book,logs);const isKindle=book.unit==="pos";return <div key={book.id} className="card book-card" style={{marginBottom:"10px"}} onClick={()=>setDetail(book.id)}>
+                  <div className="book-cover">{book.cover?<img src={book.cover} alt=""/>:"📖"}</div>
+                  <div className="book-info"><div style={{display:"flex",alignItems:"center",gap:"6px"}}><div className="book-name" style={{flex:1}}>{book.name}</div>{isKindle&&<span className="kindle-badge">📱</span>}</div>
+                  <span className="book-status done">✓ Finalizado</span>
+                  <div className="book-meta">{s.days} días · {s.avgPerDay} {unitLabel(book.unit)}/día</div></div>
+                </div>;})}
               </>}
             </>
           }
@@ -509,7 +465,7 @@ export default function App() {
         </div>
       )}
 
-      {tab === "stats" && (
+      {tab==="stats" && (
         <div className="content">
           <div className="stats-grid">
             <div className="stat-card accent"><div className="stat-value">{streak.current}</div><div className="stat-label">Racha actual 🔥</div></div>
@@ -517,79 +473,66 @@ export default function App() {
             <div className="stat-card"><div className="stat-value">{finished.length}</div><div className="stat-label">Libros terminados</div></div>
             <div className="stat-card"><div className="stat-value">{books.length}</div><div className="stat-label">Total de libros</div></div>
             <div className="stat-card"><div className="stat-value">{logs.length}</div><div className="stat-label">Sesiones</div></div>
-            <div className="stat-card"><div className="stat-value">{bestDay || "—"}</div><div className="stat-label">Mejor día (págs)</div></div>
+            <div className="stat-card"><div className="stat-value">{bestDay||"—"}</div><div className="stat-label">Mejor día</div></div>
           </div>
-          {books.length > 0 && <>
-            <div className="section-header" style={{marginTop:"4px"}}><span className="section-title">Por libro</span></div>
-            {books.map((book) => {
-              const s = bookStats(book, logs);
-              if (s.totalLogs === 0) return null;
-              return (
-                <div key={book.id} className="card card-sm" style={{display:"flex",gap:"10px",alignItems:"center",cursor:"pointer",marginBottom:"8px"}} onClick={() => setDetail(book.id)}>
-                  <div className="book-cover" style={{width:40,height:56,fontSize:18}}>{book.cover ? <img src={book.cover} alt=""/> : "📖"}</div>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontFamily:"var(--font-display)",fontSize:"14px",fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{book.name}</div>
-                    <div style={{fontSize:"12px",color:"var(--text3)",marginTop:"2px"}}>{s.avgPerDay} pág/día · {s.days} días</div>
-                    <div className="progress-row" style={{marginTop:"4px"}}><div className="progress-bar"><div className="progress-fill" style={{width:`${s.pct}%`}}/></div><span className="progress-pct" style={{fontSize:"11px"}}>{s.pct}%</span></div>
-                  </div>
-                </div>
-              );
-            })}
+          {books.length>0&&<><div className="section-header" style={{marginTop:"4px"}}><span className="section-title">Por libro</span></div>
+            {books.map(book=>{const s=bookStats(book,logs);if(s.totalLogs===0)return null;const isKindle=book.unit==="pos";return <div key={book.id} className="card card-sm" style={{display:"flex",gap:"10px",alignItems:"center",cursor:"pointer",marginBottom:"8px"}} onClick={()=>setDetail(book.id)}>
+              <div className="book-cover" style={{width:40,height:56,fontSize:18}}>{book.cover?<img src={book.cover} alt=""/>:"📖"}</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:"6px",marginBottom:"2px"}}><div style={{fontFamily:"var(--font-display)",fontSize:"14px",fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",flex:1}}>{book.name}</div>{isKindle&&<span className="kindle-badge">📱</span>}</div>
+                <div style={{fontSize:"12px",color:"var(--text3)"}}>{s.avgPerDay} {unitLabel(book.unit)}/día · {s.days} días</div>
+                <div className="progress-row" style={{marginTop:"4px"}}><div className="progress-bar"><div className={`progress-fill ${isKindle?"kindle":""}`} style={{width:`${s.pct}%`}}/></div><span className={`progress-pct ${isKindle?"kindle":""}`} style={{fontSize:"11px"}}>{s.pct}%</span></div>
+              </div>
+            </div>;})}
           </>}
           <div style={{height:"80px"}}/>
         </div>
       )}
 
-      <button className="fab" onClick={() => { setEditTarget(null); setModal("addLog"); }}>+</button>
+      <button className="fab" onClick={()=>{setEditTarget(null);setModal("addLog");}}>+</button>
       <div style={{position:"fixed",bottom:"24px",left:"24px",zIndex:50}}>
-        <button className="btn btn-secondary btn-sm" style={{borderRadius:"20px",width:"auto",boxShadow:"var(--shadow-md)"}} onClick={() => setModal("addBook")}>+ Libro</button>
+        <button className="btn btn-secondary btn-sm" style={{borderRadius:"20px",width:"auto",boxShadow:"var(--shadow-md)"}} onClick={()=>setModal("addBook")}>+ Libro</button>
       </div>
 
-      {modal === "addBook" && <AddBookModal onSave={addBook} onClose={() => setModal(null)}/>}
-      {modal === "editBook" && <AddBookModal book={editTarget} onSave={(b) => updateBook(editTarget.id, b)} onClose={() => setModal(null)} edit/>}
-      {modal === "addLog" && (
-        <AddLogModal books={books} preBookId={editTarget?.bookId} logs={logs} warnLog={warnLog}
-          onConfirmWarn={() => addLog(warnLog)} onCancelWarn={() => setWarnLog(null)}
-          onSave={addLog} onClose={() => { setModal(null); setWarnLog(null); setEditTarget(null); }}/>
-      )}
-      {modal === "editLog" && <EditLogModal log={editTarget} books={books} onSave={(p) => updateLog(editTarget.id, p)} onClose={() => { setModal(null); setEditTarget(null); }}/>}
-      {toast && <div className="toast">{toast}</div>}
+      {modal==="addBook"&&<AddBookModal onSave={addBook} onClose={()=>setModal(null)}/>}
+      {modal==="editBook"&&<AddBookModal book={editTarget} onSave={(b)=>updateBook(editTarget.id,b)} onClose={()=>setModal(null)} edit/>}
+      {modal==="addLog"&&<AddLogModal books={books} preBookId={editTarget?.bookId} logs={logs} warnLog={warnLog} onConfirmWarn={()=>addLog(warnLog)} onCancelWarn={()=>setWarnLog(null)} onSave={addLog} onClose={()=>{setModal(null);setWarnLog(null);setEditTarget(null);}}/>}
+      {modal==="editLog"&&<EditLogModal log={editTarget} books={books} onSave={(p)=>updateLog(editTarget.id,p)} onClose={()=>{setModal(null);setEditTarget(null);}}/>}
+      {toast&&<div className="toast">{toast}</div>}
     </div>
   );
 }
 
-// ─── Modals ───────────────────────────────────────────────────────────────────
 function AddBookModal({ onSave, onClose, book, edit }) {
-  const [name, setName] = useState(book?.name || "");
-  const [pages, setPages] = useState(book?.totalPages || "");
-  const [cover, setCover] = useState(book?.cover || null);
-  const handleCover = (e) => {
-    const f = e.target.files[0]; if (!f) return;
-    const r = new FileReader(); r.onload = (ev) => setCover(ev.target.result); r.readAsDataURL(f);
-  };
+  const [name, setName] = useState(book?.name||"");
+  const [pages, setPages] = useState(book?.totalPages||"");
+  const [cover, setCover] = useState(book?.cover||null);
+  const [unit, setUnit] = useState(book?.unit||"page");
+  const handleCover = (e) => { const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=(ev)=>setCover(ev.target.result);r.readAsDataURL(f); };
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
       <div className="modal">
         <div className="modal-handle"/>
-        <div className="modal-title">{edit ? "Editar libro" : "Nuevo libro"}</div>
+        <div className="modal-title">{edit?"Editar libro":"Nuevo libro"}</div>
+        <div className="form-group">
+          <label className="form-label">Tipo de seguimiento</label>
+          <div className="unit-toggle">
+            <button className={`unit-option ${unit==="page"?"active":""}`} onClick={()=>setUnit("page")}>📄 Páginas</button>
+            <button className={`unit-option ${unit==="pos"?"kindle-active":""}`} onClick={()=>setUnit("pos")}>📱 Posición Kindle</button>
+          </div>
+        </div>
         <div style={{display:"flex",gap:"14px",alignItems:"flex-start"}}>
           <label className="cover-upload">
-            {cover ? <img src={cover} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/> : <><span>📷</span><small>Portada</small></>}
+            {cover?<img src={cover} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/>:<><span>📷</span><small>Portada</small></>}
             <input type="file" accept="image/*" onChange={handleCover}/>
           </label>
           <div style={{flex:1,display:"flex",flexDirection:"column",gap:"12px"}}>
-            <div className="form-group">
-              <label className="form-label">Nombre</label>
-              <input className="form-input" value={name} onChange={e=>setName(e.target.value)} placeholder="Título del libro" autoFocus/>
-            </div>
-            <div className="form-group">
-              <label className="form-label">Total de páginas</label>
-              <input className="form-input" type="number" value={pages} onChange={e=>setPages(e.target.value)} placeholder="350"/>
-            </div>
+            <div className="form-group"><label className="form-label">Nombre</label><input className="form-input" value={name} onChange={e=>setName(e.target.value)} placeholder="Título del libro" autoFocus/></div>
+            <div className="form-group"><label className="form-label">{unitTotalLabel(unit)}</label><input className="form-input" type="number" value={pages} onChange={e=>setPages(e.target.value)} placeholder={unit==="pos"?"ej. 3500":"ej. 350"}/></div>
           </div>
         </div>
-        <button className="btn btn-primary" onClick={() => { if(!name.trim()) return; onSave({name:name.trim(),totalPages:parseInt(pages)||null,cover}); }} disabled={!name.trim()}>
-          {edit ? "Guardar cambios" : "Agregar libro"}
+        <button className="btn btn-primary" onClick={()=>{if(!name.trim())return;onSave({name:name.trim(),totalPages:parseInt(pages)||null,cover,unit});}} disabled={!name.trim()}>
+          {edit?"Guardar cambios":"Agregar libro"}
         </button>
         <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
       </div>
@@ -598,30 +541,28 @@ function AddBookModal({ onSave, onClose, book, edit }) {
 }
 
 function AddLogModal({ books, preBookId, logs, warnLog, onConfirmWarn, onCancelWarn, onSave, onClose }) {
-  const [bookId, setBookId] = useState(preBookId || (books[0]?.id || ""));
+  const [bookId, setBookId] = useState(preBookId||(books[0]?.id||""));
   const [date, setDate] = useState(todayStr());
   const [page, setPage] = useState("");
   const [search, setSearch] = useState("");
-  const filtered = books.filter(b => b.name.toLowerCase().includes(search.toLowerCase()));
-  const lastLog = logs.filter(l => l.bookId === bookId).sort((a,b)=>b.date.localeCompare(a.date))[0];
+  const filtered = books.filter(b=>b.name.toLowerCase().includes(search.toLowerCase()));
+  const selectedBook = books.find(b=>b.id===bookId);
+  const lastLog = logs.filter(l=>l.bookId===bookId).sort((a,b)=>b.date.localeCompare(a.date))[0];
+  const ul = unitLabel(selectedBook?.unit);
 
   if (warnLog) return (
-    <div className="modal-overlay">
-      <div className="modal">
-        <div className="modal-handle"/>
-        <div className="modal-title">⚠️ Página menor</div>
-        <div className="warning-box">
-          <div className="warning-icon">⚠️</div>
-          <div className="warning-text">La página <strong>{warnLog.page}</strong> es menor al último registro (<strong>{lastLog?.page}</strong>). ¿Querés continuar de todos modos?</div>
-        </div>
-        <button className="btn btn-primary" onClick={onConfirmWarn}>Continuar de todos modos</button>
-        <button className="btn btn-ghost" onClick={onCancelWarn}>Cancelar</button>
-      </div>
-    </div>
+    <div className="modal-overlay"><div className="modal">
+      <div className="modal-handle"/>
+      <div className="modal-title">⚠️ Valor menor</div>
+      <div className="warning-box"><div className="warning-icon">⚠️</div>
+      <div className="warning-text">{unitLabelCap(selectedBook?.unit)} <strong>{warnLog.page}</strong> es menor al último registro (<strong>{lastLog?.page}</strong>). ¿Querés continuar?</div></div>
+      <button className="btn btn-primary" onClick={onConfirmWarn}>Continuar de todos modos</button>
+      <button className="btn btn-ghost" onClick={onCancelWarn}>Cancelar</button>
+    </div></div>
   );
 
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
       <div className="modal">
         <div className="modal-handle"/>
         <div className="modal-title">Registrar lectura</div>
@@ -629,23 +570,23 @@ function AddLogModal({ books, preBookId, logs, warnLog, onConfirmWarn, onCancelW
           <label className="form-label">Libro</label>
           <input className="form-input" placeholder="Buscar libro..." value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:"6px"}}/>
           <div style={{background:"var(--surface2)",borderRadius:"var(--r-sm)",overflow:"hidden",maxHeight:"140px",overflowY:"auto"}}>
-            {filtered.length === 0
+            {filtered.length===0
               ? <div style={{padding:"12px",fontSize:"13px",color:"var(--text3)",textAlign:"center"}}>Sin resultados</div>
-              : filtered.map(b => (
-                <div key={b.id} onClick={() => { setBookId(b.id); setSearch(""); }}
-                  style={{padding:"10px 14px",cursor:"pointer",background:bookId===b.id?"var(--accent-light)":"transparent",color:bookId===b.id?"var(--accent)":"var(--text)",fontSize:"14px",fontWeight:bookId===b.id?500:400,transition:"background .1s"}}>
-                  {b.name}
+              : filtered.map(b=>(
+                <div key={b.id} onClick={()=>{setBookId(b.id);setSearch("");setPage("");}}
+                  style={{padding:"10px 14px",cursor:"pointer",background:bookId===b.id?"var(--accent-light)":"transparent",color:bookId===b.id?"var(--accent)":"var(--text)",fontSize:"14px",fontWeight:bookId===b.id?500:400,transition:"background .1s",display:"flex",alignItems:"center",gap:"8px"}}>
+                  {b.name}{b.unit==="pos"&&<span className="kindle-badge" style={{marginLeft:"auto"}}>📱 pos.</span>}
                 </div>
               ))
             }
           </div>
         </div>
-        {lastLog && <div style={{fontSize:"12px",color:"var(--text3)",background:"var(--surface2)",padding:"8px 12px",borderRadius:"var(--r-sm)"}}>Último registro: <strong style={{color:"var(--accent)"}}>p.{lastLog.page}</strong> el {fmtShort(lastLog.date)}</div>}
+        {lastLog&&<div style={{fontSize:"12px",color:"var(--text3)",background:"var(--surface2)",padding:"8px 12px",borderRadius:"var(--r-sm)"}}>Último: <strong style={{color:selectedBook?.unit==="pos"?"var(--kindle)":"var(--accent)"}}>{ul}{lastLog.page}</strong> el {fmtShort(lastLog.date)}</div>}
         <div className="form-grid">
           <div className="form-group"><label className="form-label">Fecha</label><input className="form-input" type="date" value={date} onChange={e=>setDate(e.target.value)}/></div>
-          <div className="form-group"><label className="form-label">Página</label><input className="form-input" type="number" value={page} onChange={e=>setPage(e.target.value)} placeholder="ej. 120"/></div>
+          <div className="form-group"><label className="form-label">{unitInputLabel(selectedBook?.unit)}</label><input className="form-input" type="number" value={page} onChange={e=>setPage(e.target.value)} placeholder={unitPlaceholder(selectedBook?.unit)}/></div>
         </div>
-        <button className="btn btn-primary" onClick={() => onSave({bookId,date,page:parseInt(page)})} disabled={!bookId||!page}>Guardar lectura</button>
+        <button className="btn btn-primary" onClick={()=>onSave({bookId,date,page:parseInt(page)})} disabled={!bookId||!page}>Guardar lectura</button>
         <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
       </div>
     </div>
@@ -655,18 +596,21 @@ function AddLogModal({ books, preBookId, logs, warnLog, onConfirmWarn, onCancelW
 function EditLogModal({ log, books, onSave, onClose }) {
   const [date, setDate] = useState(log.date);
   const [page, setPage] = useState(log.page);
-  const book = books.find(b => b.id === log.bookId);
+  const book = books.find(b=>b.id===log.bookId);
   return (
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
       <div className="modal">
         <div className="modal-handle"/>
         <div className="modal-title">Editar registro</div>
-        <div style={{fontSize:"13px",color:"var(--text3)",background:"var(--surface2)",padding:"8px 12px",borderRadius:"var(--r-sm)"}}>Libro: <strong style={{color:"var(--text)"}}>{book?.name}</strong></div>
+        <div style={{fontSize:"13px",color:"var(--text3)",background:"var(--surface2)",padding:"8px 12px",borderRadius:"var(--r-sm)",display:"flex",alignItems:"center",gap:"8px"}}>
+          <span>Libro: <strong style={{color:"var(--text)"}}>{book?.name}</strong></span>
+          {book?.unit==="pos"&&<span className="kindle-badge">📱 pos.</span>}
+        </div>
         <div className="form-grid">
           <div className="form-group"><label className="form-label">Fecha</label><input className="form-input" type="date" value={date} onChange={e=>setDate(e.target.value)}/></div>
-          <div className="form-group"><label className="form-label">Página</label><input className="form-input" type="number" value={page} onChange={e=>setPage(e.target.value)}/></div>
+          <div className="form-group"><label className="form-label">{unitInputLabel(book?.unit)}</label><input className="form-input" type="number" value={page} onChange={e=>setPage(e.target.value)}/></div>
         </div>
-        <button className="btn btn-primary" onClick={() => onSave({date,page:parseInt(page)})}>Guardar</button>
+        <button className="btn btn-primary" onClick={()=>onSave({date,page:parseInt(page)})}>Guardar</button>
         <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>
       </div>
     </div>
