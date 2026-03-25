@@ -14,21 +14,11 @@ const unitTotalLabel = (unit) => unit === "pos" ? "Total de posiciones" : "Total
 const unitInputLabel = (unit) => unit === "pos" ? "Posición" : "Página";
 
 const normalizeBook = (b) => ({
-  id: b.id,
-  name: b.name,
-  totalPages: b.total_pages,
-  cover: b.cover,
-  status: b.status,
-  unit: b.unit || "page",
-  finishedAt: b.finished_at,
-  createdAt: b.created_at,
+  id: b.id, name: b.name, totalPages: b.total_pages,
+  cover: b.cover, status: b.status, unit: b.unit || "page",
+  finishedAt: b.finished_at, createdAt: b.created_at,
 });
-const normalizeLog = (l) => ({
-  id: l.id,
-  bookId: l.book_id,
-  date: l.date,
-  page: l.page,
-});
+const normalizeLog = (l) => ({ id: l.id, bookId: l.book_id, date: l.date, page: l.page });
 
 const calcStreak = (logs) => {
   if (!logs.length) return { current: 0, best: 0 };
@@ -38,23 +28,21 @@ const calcStreak = (logs) => {
     const diff = (new Date(dates[i]) - new Date(dates[i - 1])) / 86400000;
     if (diff === 1) { cur++; if (cur > best) best = cur; } else cur = 1;
   }
-  const last = dates[dates.length - 1];
-  if ((new Date(todayStr()) - new Date(last)) / 86400000 > 1) cur = 0;
+  if ((new Date(todayStr()) - new Date(dates[dates.length - 1])) / 86400000 > 1) cur = 0;
   return { current: cur, best };
 };
 
 const bookStats = (book, logs) => {
   const bl = logs.filter((l) => l.bookId === book.id).sort((a, b) => a.date.localeCompare(b.date));
-  const lastLog = bl[bl.length - 1];
-  const currentPage = lastLog ? lastLog.page : 0;
+  const currentPage = bl[bl.length - 1]?.page || 0;
   const pct = book.totalPages ? Math.min(100, Math.round((currentPage / book.totalPages) * 100)) : 0;
   const startDate = bl[0]?.date || null;
   const endDate = book.finishedAt || null;
   const days = startDate && endDate
     ? Math.ceil((new Date(endDate) - new Date(startDate)) / 86400000) + 1
     : startDate ? Math.ceil((new Date(todayStr()) - new Date(startDate)) / 86400000) + 1 : 0;
-  const totalPagesRead = bl.reduce((acc, l, i) => acc + (i === 0 ? l.page : Math.max(0, l.page - bl[i - 1].page)), 0);
-  const avgPerDay = days > 0 ? Math.round(totalPagesRead / days) : 0;
+  const totalRead = bl.reduce((acc, l, i) => acc + (i === 0 ? l.page : Math.max(0, l.page - bl[i - 1].page)), 0);
+  const avgPerDay = days > 0 ? Math.round(totalRead / days) : 0;
   const bestDay = bl.reduce((best, l, i) => {
     const pages = i === 0 ? l.page : Math.max(0, l.page - bl[i - 1].page);
     return pages > best.pages ? { date: l.date, pages } : best;
@@ -69,7 +57,7 @@ const styles = `
 :root{
   --bg:#F5F2EE;--surface:#FDFCFB;--surface2:#F0EDE8;--border:rgba(60,40,20,.10);
   --text:#1A1512;--text2:#6B5E52;--text3:#A89D94;
-  --accent:#C4602A;--accent-light:#F2DDD0;--accent2:#2A6B5E;--accent2-light:#D0EDE8;
+  --accent:#C4602A;--accent-light:#F2DDD0;--accent2:#2A6B5E;
   --green:#3B8A5A;--green-light:#D6EFE1;--danger:#B03030;
   --warning:#C4862A;--warning-light:#FBF0D8;
   --kindle:#6B52A8;--kindle-light:#EDE8F8;
@@ -79,6 +67,17 @@ const styles = `
 }
 body{background:var(--bg);font-family:var(--font-body);color:var(--text);-webkit-font-smoothing:antialiased}
 .app{max-width:480px;margin:0 auto;min-height:100vh;display:flex;flex-direction:column}
+
+/* AUTH */
+.auth-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--bg)}
+.auth-card{background:var(--surface);border:1px solid var(--border);border-radius:20px;padding:32px 28px;width:100%;max-width:380px;box-shadow:var(--shadow-md);display:flex;flex-direction:column;gap:20px}
+.auth-logo{font-family:var(--font-display);font-size:28px;font-weight:700;color:var(--text);text-align:center}
+.auth-logo span{color:var(--accent)}
+.auth-subtitle{font-size:13px;color:var(--text3);text-align:center;margin-top:-12px}
+.auth-error{background:#FCDEDE;border:1px solid #E8A0A0;border-radius:var(--r-sm);padding:10px 14px;font-size:13px;color:var(--danger)}
+.auth-switch{font-size:13px;color:var(--text3);text-align:center}
+.auth-switch button{background:none;border:none;color:var(--accent);cursor:pointer;font-size:13px;font-weight:500;text-decoration:underline}
+
 .nav{background:var(--surface);border-bottom:1px solid var(--border);padding:0 16px;display:flex;align-items:stretch;position:sticky;top:0;z-index:100;backdrop-filter:blur(12px)}
 .nav-logo{font-family:var(--font-display);font-size:20px;font-weight:700;color:var(--text);padding:14px 0;flex:1;display:flex;align-items:center;gap:8px}
 .nav-logo span{color:var(--accent)}
@@ -92,7 +91,7 @@ body{background:var(--bg);font-family:var(--font-body);color:var(--text);-webkit
 .content{flex:1;padding:16px;display:flex;flex-direction:column;gap:12px}
 .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:16px;box-shadow:var(--shadow)}
 .card-sm{padding:12px}
-.book-card{display:flex;gap:12px;cursor:pointer;transition:box-shadow .15s,transform .1s;position:relative;overflow:hidden}
+.book-card{display:flex;gap:12px;cursor:pointer;transition:box-shadow .15s,transform .1s}
 .book-card:hover{box-shadow:var(--shadow-md);transform:translateY(-1px)}
 .book-cover{width:52px;height:72px;border-radius:6px;overflow:hidden;flex-shrink:0;background:var(--surface2);display:flex;align-items:center;justify-content:center;font-size:22px}
 .book-cover img{width:100%;height:100%;object-fit:cover}
@@ -151,7 +150,7 @@ body{background:var(--bg);font-family:var(--font-body);color:var(--text);-webkit
 .btn-icon:hover{background:var(--accent-light);color:var(--accent)}
 .btn-icon.danger:hover{background:#FCDEDE;color:var(--danger)}
 .fab{position:fixed;bottom:24px;right:24px;width:56px;height:56px;border-radius:50%;background:var(--accent);color:white;border:none;font-size:24px;cursor:pointer;box-shadow:0 4px 20px rgba(196,96,42,.4);display:flex;align-items:center;justify-content:center;transition:transform .15s,box-shadow .15s;z-index:50}
-.fab:hover{transform:scale(1.08);box-shadow:0 6px 24px rgba(196,96,42,.5)}
+.fab:hover{transform:scale(1.08)}
 .fab:active{transform:scale(.95)}
 .modal-overlay{position:fixed;inset:0;background:rgba(26,21,18,.45);backdrop-filter:blur(4px);z-index:200;display:flex;align-items:flex-end;justify-content:center;animation:fadeIn .2s}
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
@@ -193,11 +192,63 @@ body{background:var(--bg);font-family:var(--font-body);color:var(--text);-webkit
 ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
 `;
 
+// ─── Auth Screen ──────────────────────────────────────────────────────────────
+function AuthScreen() {
+  const [mode, setMode] = useState("login"); // "login" | "register"
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
+
+  const submit = async () => {
+    setError(""); setSuccess(""); setLoading(true);
+    if (mode === "login") {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) setError("Email o contraseña incorrectos");
+    } else {
+      const { error } = await supabase.auth.signUp({ email, password });
+      if (error) setError(error.message);
+      else setSuccess("¡Cuenta creada! Ya podés ingresar.");
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div className="auth-wrap">
+      <style>{styles}</style>
+      <div className="auth-card">
+        <div>
+          <div className="auth-logo">Libros<span>.</span></div>
+          <div className="auth-subtitle">Tu tracker de lectura personal</div>
+        </div>
+        {error && <div className="auth-error">⚠️ {error}</div>}
+        {success && <div style={{background:"var(--green-light)",border:"1px solid #90CCA8",borderRadius:"var(--r-sm)",padding:"10px 14px",fontSize:"13px",color:"var(--green)"}}>✓ {success}</div>}
+        <div className="form-group">
+          <label className="form-label">Email</label>
+          <input className="form-input" type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="tu@email.com" onKeyDown={e=>e.key==="Enter"&&submit()}/>
+        </div>
+        <div className="form-group">
+          <label className="form-label">Contraseña</label>
+          <input className="form-input" type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="••••••••" onKeyDown={e=>e.key==="Enter"&&submit()}/>
+        </div>
+        <button className="btn btn-primary" onClick={submit} disabled={loading||!email||!password}>
+          {loading ? "..." : mode === "login" ? "Ingresar" : "Crear cuenta"}
+        </button>
+        <div className="auth-switch">
+          {mode === "login" ? <>¿No tenés cuenta? <button onClick={()=>{setMode("register");setError("");}}>Registrate</button></> : <>¿Ya tenés cuenta? <button onClick={()=>{setMode("login");setError("");}}>Ingresá</button></>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
+  const [session, setSession] = useState(undefined); // undefined = loading, null = no session
   const [books, setBooks] = useState([]);
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
   const [tab, setTab] = useState("home");
   const [modal, setModal] = useState(null);
   const [detail, setDetail] = useState(null);
@@ -207,27 +258,48 @@ export default function App() {
   const [warnLog, setWarnLog] = useState(null);
   const toastTimer = useRef(null);
 
+  // ── Auth listener — persists session automatically ──
   useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => setSession(session));
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => setSession(session));
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // ── Load data when session is ready ──
+  useEffect(() => {
+    if (!session) { setLoading(false); return; }
     const fetchData = async () => {
       setLoading(true);
-      const [{ data: booksData, error: booksErr }, { data: logsData, error: logsErr }] = await Promise.all([
+      const [{ data: booksData }, { data: logsData }] = await Promise.all([
         supabase.from("books").select("*").order("created_at"),
         supabase.from("logs").select("*").order("date"),
       ]);
-      if (booksErr || logsErr) { setError(booksErr?.message || logsErr?.message); }
-      else { setBooks((booksData || []).map(normalizeBook)); setLogs((logsData || []).map(normalizeLog)); }
+      setBooks((booksData || []).map(normalizeBook));
+      setLogs((logsData || []).map(normalizeLog));
       setLoading(false);
     };
     fetchData();
-  }, []);
+  }, [session]);
 
   const showToast = (msg) => {
     setToast(msg); clearTimeout(toastTimer.current);
     toastTimer.current = setTimeout(() => setToast(null), 2500);
   };
 
+  const logout = async () => {
+    await supabase.auth.signOut();
+    setBooks([]); setLogs([]);
+    showToast("👋 Sesión cerrada");
+  };
+
+  // ── CRUD — all writes include user_id automatically via RLS ──
   const addBook = async (book) => {
-    const newBook = { id: uid(), name: book.name, total_pages: book.totalPages, cover: book.cover || null, status: "progress", unit: book.unit || "page", finished_at: null, created_at: todayStr() };
+    const newBook = {
+      id: uid(), name: book.name, total_pages: book.totalPages,
+      cover: book.cover || null, status: "progress",
+      unit: book.unit || "page", finished_at: null,
+      created_at: todayStr(), user_id: session.user.id,
+    };
     const { error } = await supabase.from("books").insert(newBook);
     if (error) { showToast("❌ Error al guardar"); return; }
     setBooks((prev) => [...prev, normalizeBook(newBook)]);
@@ -265,7 +337,7 @@ export default function App() {
     const bookLogs = logs.filter((l) => l.bookId === log.bookId).sort((a, b) => a.date.localeCompare(b.date));
     const lastLog = bookLogs[bookLogs.length - 1];
     if (lastLog && log.page < lastLog.page && !warnLog) { setWarnLog(log); return; }
-    const newLog = { id: uid(), book_id: log.bookId, date: log.date, page: log.page };
+    const newLog = { id: uid(), book_id: log.bookId, date: log.date, page: log.page, user_id: session.user.id };
     const { error } = await supabase.from("logs").insert(newLog);
     if (error) { showToast("❌ Error al guardar"); return; }
     setLogs((prev) => [...prev, normalizeLog(newLog)]);
@@ -288,6 +360,7 @@ export default function App() {
     showToast("🗑️ Registro eliminado");
   };
 
+  // ── Derived ──
   const streak = useMemo(() => calcStreak(logs), [logs]);
   const sortedLogs = useMemo(() => [...logs].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)), [logs]);
   const inProgress = books.filter((b) => b.status === "progress");
@@ -302,9 +375,12 @@ export default function App() {
     return Math.max(0, ...Object.values(byDate));
   }, [logs]);
 
+  // ── Render guards ──
+  if (session === undefined) return <div className="app"><style>{styles}</style><div className="loading"><div className="spinner"/></div></div>;
+  if (!session) return <AuthScreen />;
   if (loading) return <div className="app"><style>{styles}</style><div className="loading"><div className="spinner"/><span>Cargando tu biblioteca…</span></div></div>;
-  if (error) return <div className="app"><style>{styles}</style><div className="loading"><div style={{fontSize:"32px"}}>⚠️</div><div style={{color:"var(--danger)",fontWeight:500}}>Error de conexión</div><div style={{fontSize:"12px",maxWidth:"260px",textAlign:"center"}}>{error}</div></div></div>;
 
+  // ── Detail view ──
   if (detail) {
     const book = books.find((b) => b.id === detail);
     if (!book) { setDetail(null); return null; }
@@ -386,7 +462,8 @@ export default function App() {
       <div className="nav">
         <div className="nav-logo">Libros<span>.</span></div>
         <div className="nav-actions">
-          <button className={`nav-btn ${adminMode?"active":""}`} onClick={()=>setAdminMode(v=>!v)}>⚙️</button>
+          <button className={`nav-btn ${adminMode?"active":""}`} onClick={()=>setAdminMode(v=>!v)} title="Admin">⚙️</button>
+          <button className="nav-btn" onClick={logout} title="Cerrar sesión">🚪</button>
         </div>
       </div>
       <div className="tab-bar">
@@ -503,6 +580,7 @@ export default function App() {
   );
 }
 
+// ─── Modals ───────────────────────────────────────────────────────────────────
 function AddBookModal({ onSave, onClose, book, edit }) {
   const [name, setName] = useState(book?.name||"");
   const [pages, setPages] = useState(book?.totalPages||"");
