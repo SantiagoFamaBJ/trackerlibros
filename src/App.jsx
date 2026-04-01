@@ -280,7 +280,8 @@ export default function App() {
   const [showProfile, setShowProfile] = useState(false);
   const [friendships, setFriendships] = useState([]);
   const [friendProfiles, setFriendProfiles] = useState([]);
-  const [viewingFriend, setViewingFriend] = useState(null); // undefined = loading, null = no session
+  const [viewingFriend, setViewingFriend] = useState(null);
+  const [achievements, setAchievements] = useState([]); // undefined = loading, null = no session
   const [books, setBooks] = useState([]);
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -333,6 +334,10 @@ export default function App() {
           if (fp) setFriendProfiles(fp.map(normalizeProfile));
         }
       }
+      // Load achievements
+      const { data: achData } = await supabase.from("achievements").select("*").eq("user_id", session.user.id);
+      if (achData) setAchievements(achData.map(a => a.type));
+
       setLoading(false);
     };
     fetchData();
@@ -368,6 +373,42 @@ export default function App() {
   };
 
   // ── CRUD — all writes include user_id automatically via RLS ──
+  // ── Achievements ──
+  const ACHIEVEMENTS = {
+    first_book:    { label: "Primer libro terminado", icon: "📚", desc: "Terminaste tu primer libro" },
+    streak_7:      { label: "Racha de 7 días",        icon: "🔥", desc: "7 días consecutivos leyendo" },
+    streak_30:     { label: "Racha de 30 días",       icon: "🚀", desc: "30 días consecutivos leyendo" },
+    books_5:       { label: "5 libros leídos",        icon: "⭐", desc: "Terminaste 5 libros" },
+    books_10:      { label: "10 libros leídos",       icon: "🏆", desc: "Terminaste 10 libros" },
+    active_30:     { label: "30 días activos",        icon: "📅", desc: "30 días distintos con lectura" },
+  };
+
+  const checkAchievements = async (updatedBooks, updatedLogs) => {
+    const finishedBooks = updatedBooks.filter(b => b.status === "done");
+    const streak = calcStreak(updatedLogs);
+    const activeDays = new Set(updatedLogs.map(l => l.date)).size;
+
+    const toUnlock = [];
+    if (finishedBooks.length >= 1)  toUnlock.push("first_book");
+    if (finishedBooks.length >= 5)  toUnlock.push("books_5");
+    if (finishedBooks.length >= 10) toUnlock.push("books_10");
+    if (streak.current >= 7)        toUnlock.push("streak_7");
+    if (streak.current >= 30)       toUnlock.push("streak_30");
+    if (activeDays >= 30)           toUnlock.push("active_30");
+
+    const newOnes = toUnlock.filter(t => !achievements.includes(t));
+    if (!newOnes.length) return;
+
+    await Promise.all(newOnes.map(type =>
+      supabase.from("achievements").insert({ user_id: session.user.id, type }).then(() => {})
+    ));
+    setAchievements(prev => [...prev, ...newOnes]);
+    newOnes.forEach(type => {
+      const a = ACHIEVEMENTS[type];
+      showToast(`${a.icon} Logro: ${a.label}`);
+    });
+  };
+
   // ── Friends ──
   const sendFriendRequest = async (addresseeId) => {
     const { error } = await supabase.from("friendships").insert({
@@ -435,6 +476,8 @@ export default function App() {
   const finishBook = async (id) => {
     await updateBook(id, { status: "done", finishedAt: todayStr() });
     showToast("🎉 ¡Libro finalizado!");
+    const updatedBooks = books.map(b => b.id === id ? { ...b, status: "done", finishedAt: todayStr() } : b);
+    setTimeout(() => checkAchievements(updatedBooks, logs), 500);
   };
 
   const startBook = async (id) => {
@@ -451,6 +494,8 @@ export default function App() {
     if (error) { showToast("❌ Error al guardar"); return; }
     setLogs((prev) => [...prev, normalizeLog(newLog)]);
     showToast("✅ Lectura registrada"); setModal(null); setWarnLog(null); setEditTarget(null);
+    const updatedLogs = [...logs, normalizeLog(newLog)];
+    setTimeout(() => checkAchievements(books, updatedLogs), 500);
     const book = books.find((b) => b.id === log.bookId);
     if (book && book.totalPages && log.page >= book.totalPages && book.status !== "done") finishBook(book.id);
   };
@@ -605,7 +650,7 @@ export default function App() {
         </div>
       </div>
       <div className="tab-bar">
-        {[["home","Inicio"],["books","Biblioteca"],["stats","Estadísticas"],["friends","Amigos"]].map(([id,label])=>(
+        {[["home","Inicio"],["books","Biblioteca"],["stats","Estadísticas"],["feed","Feed"],["friends","Amigos"]].map(([id,label])=>(
           <button key={id} className={`tab ${tab===id?"active":""}`} onClick={()=>setTab(id)}>{label}</button>
         ))}
       </div>
@@ -713,6 +758,16 @@ export default function App() {
           </>}
           <div style={{height:"80px"}}/>
         </div>
+      )}
+
+      {tab==="feed" && (
+        <FeedTab
+          session={session}
+          friendships={friendships}
+          friendProfiles={friendProfiles}
+          achievements={achievements}
+          onViewFriend={setViewingFriend}
+        />
       )}
 
       {tab==="friends" && (
@@ -912,6 +967,175 @@ function ActivityGrid({ logs }) {
 }
 
 
+
+
+// ─── Feed Tab ─────────────────────────────────────────────────────────────────
+function FeedTab({ session, friendships, friendProfiles, achievements, onViewFriend }) {
+  const [feedItems, setFeedItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const ACHIEVEMENTS = {
+    first_book: { label: "Primer libro terminado", icon: "📚" },
+    streak_7:   { label: "Racha de 7 días",        icon: "🔥" },
+    streak_30:  { label: "Racha de 30 días",       icon: "🚀" },
+    books_5:    { label: "5 libros leídos",        icon: "⭐" },
+    books_10:   { label: "10 libros leídos",       icon: "🏆" },
+    active_30:  { label: "30 días activos",        icon: "📅" },
+  };
+
+  useEffect(() => {
+    const loadFeed = async () => {
+      setLoading(true);
+      const accepted = friendships.filter(f => f.status === "accepted");
+      const friendIds = accepted.map(f =>
+        f.requester_id === session.user.id ? f.addressee_id : f.requester_id
+      );
+
+      // Include self in feed
+      const allIds = [session.user.id, ...friendIds];
+      const items = [];
+
+      if (allIds.length) {
+        // Recent finished books
+        const { data: recentBooks } = await supabase
+          .from("books")
+          .select("*")
+          .in("user_id", allIds)
+          .eq("status", "done")
+          .order("finished_at", { ascending: false })
+          .limit(20);
+
+        // Recent achievements
+        const { data: recentAch } = await supabase
+          .from("achievements")
+          .select("*")
+          .in("user_id", allIds)
+          .order("unlocked_at", { ascending: false })
+          .limit(20);
+
+        (recentBooks || []).forEach(b => {
+          items.push({ type: "book", userId: b.user_id, date: b.finished_at, book: b });
+        });
+        (recentAch || []).forEach(a => {
+          items.push({ type: "achievement", userId: a.user_id, date: a.unlocked_at, achievement: a });
+        });
+      }
+
+      // Sort by date desc
+      items.sort((a, b) => new Date(b.date) - new Date(a.date));
+      setFeedItems(items.slice(0, 30));
+      setLoading(false);
+    };
+    loadFeed();
+  }, [friendships, session]);
+
+  // Load all profiles needed (friends + self)
+  const [allProfiles, setAllProfiles] = useState([]);
+  useEffect(() => {
+    const loadProfiles = async () => {
+      const accepted = friendships.filter(f => f.status === "accepted");
+      const friendIds = accepted.map(f =>
+        f.requester_id === session.user.id ? f.addressee_id : f.requester_id
+      );
+      const allIds = [session.user.id, ...friendIds];
+      if (!allIds.length) return;
+      const { data } = await supabase.from("profiles").select("*").in("id", allIds);
+      if (data) setAllProfiles(data.map(p => ({ id: p.id, username: p.username, fullName: p.full_name, avatarUrl: p.avatar_url })));
+    };
+    loadProfiles();
+  }, [friendships, session]);
+
+  const getProfile = (userId) => allProfiles.find(p => p.id === userId);
+  const isMe = (userId) => userId === session.user.id;
+
+  const fmtRelative = (dateStr) => {
+    const d = new Date(dateStr);
+    const now = new Date();
+    const diff = Math.floor((now - d) / 86400000);
+    if (diff === 0) return "hoy";
+    if (diff === 1) return "ayer";
+    if (diff < 7) return `hace ${diff} días`;
+    return d.toLocaleDateString("es-AR", { day: "2-digit", month: "short" });
+  };
+
+  // My achievements section
+  const myAchievements = achievements;
+
+  return (
+    <div className="content">
+      {/* My achievements */}
+      {myAchievements.length > 0 && (
+        <div>
+          <div className="section-header"><span className="section-title">Mis logros ({myAchievements.length})</span></div>
+          <div style={{display:"flex",gap:"8px",flexWrap:"wrap"}}>
+            {myAchievements.map(type => {
+              const a = ACHIEVEMENTS[type];
+              if (!a) return null;
+              return (
+                <div key={type} style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:"var(--r-sm)",padding:"8px 12px",display:"flex",alignItems:"center",gap:"6px",boxShadow:"var(--shadow)"}}>
+                  <span style={{fontSize:"18px"}}>{a.icon}</span>
+                  <span style={{fontSize:"12px",fontWeight:500,color:"var(--text)"}}>{a.label}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Feed */}
+      <div>
+        <div className="section-header"><span className="section-title">Actividad reciente</span></div>
+        {loading
+          ? <div style={{textAlign:"center",padding:"24px",color:"var(--text3)"}}>Cargando...</div>
+          : feedItems.length === 0
+            ? <div className="empty"><div className="empty-icon">📡</div><div className="empty-title">Sin actividad aún</div><div className="empty-sub">Agregá amigos para ver su actividad acá</div></div>
+            : <div className="card" style={{padding:"8px 16px"}}>
+                {feedItems.map((item, i) => {
+                  const prof = getProfile(item.userId);
+                  const name = isMe(item.userId) ? "Vos" : (prof?.fullName || prof?.username || "Alguien");
+                  const clickable = !isMe(item.userId) && prof;
+
+                  if (item.type === "book") {
+                    const b = item.book;
+                    return (
+                      <div key={i} className="log-item" style={{cursor:clickable?"pointer":"default"}}
+                        onClick={()=>clickable&&onViewFriend(prof)}>
+                        <div style={{width:"36px",height:"50px",borderRadius:"6px",overflow:"hidden",background:"var(--surface2)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"14px",flexShrink:0}}>
+                          {b.cover ? <img src={b.cover} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/> : "📖"}
+                        </div>
+                        <div className="log-main">
+                          <div className="log-book"><strong>{name}</strong> terminó <em>{b.name}</em></div>
+                          {b.rating && <div style={{fontSize:"11px",marginTop:"2px"}}>{"⭐".repeat(b.rating)}</div>}
+                          {b.review && <div style={{fontSize:"11px",color:"var(--text3)",fontStyle:"italic",marginTop:"2px",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>"{b.review}"</div>}
+                          <div className="log-date">{fmtRelative(item.date)}</div>
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  if (item.type === "achievement") {
+                    const a = ACHIEVEMENTS[item.achievement.type];
+                    if (!a) return null;
+                    return (
+                      <div key={i} className="log-item" style={{cursor:clickable?"pointer":"default"}}
+                        onClick={()=>clickable&&onViewFriend(prof)}>
+                        <div style={{width:"36px",height:"36px",borderRadius:"50%",background:"var(--accent-light)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"20px",flexShrink:0}}>{a.icon}</div>
+                        <div className="log-main">
+                          <div className="log-book"><strong>{name}</strong> desbloqueó <em>{a.label}</em></div>
+                          <div className="log-date">{fmtRelative(item.date)}</div>
+                        </div>
+                      </div>
+                    );
+                  }
+                  return null;
+                })}
+              </div>
+        }
+      </div>
+      <div style={{height:"80px"}}/>
+    </div>
+  );
+}
 
 // ─── Friends Tab ──────────────────────────────────────────────────────────────
 function FriendsTab({ session, profile, friendships, friendProfiles, onSendRequest, onAccept, onRemove, onViewFriend }) {
