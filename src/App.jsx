@@ -20,6 +20,10 @@ const normalizeBook = (b) => ({
   rating: b.rating || null, review: b.review || null,
 });
 const normalizeLog = (l) => ({ id: l.id, bookId: l.book_id, date: l.date, page: l.page });
+const normalizeProfile = (p) => ({
+  id: p.id, username: p.username, fullName: p.full_name,
+  avatarUrl: p.avatar_url, bio: p.bio,
+});
 
 const calcStreak = (logs) => {
   if (!logs.length) return { current: 0, best: 0 };
@@ -270,7 +274,10 @@ function AuthScreen() {
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [session, setSession] = useState(undefined); // undefined = loading, null = no session
+  const [session, setSession] = useState(undefined);
+  const [profile, setProfile] = useState(null);
+  const [showProfileSetup, setShowProfileSetup] = useState(false);
+  const [showProfile, setShowProfile] = useState(false); // undefined = loading, null = no session
   const [books, setBooks] = useState([]);
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -295,12 +302,16 @@ export default function App() {
     if (!session) { setLoading(false); return; }
     const fetchData = async () => {
       setLoading(true);
-      const [{ data: booksData }, { data: logsData }] = await Promise.all([
+      const [{ data: booksData, error: booksErr }, { data: logsData, error: logsErr }, { data: profileData }] = await Promise.all([
         supabase.from("books").select("*").order("created_at"),
         supabase.from("logs").select("*").order("date"),
+        supabase.from("profiles").select("*").eq("id", session.user.id).single(),
       ]);
+      if (booksErr || logsErr) { setError(booksErr?.message || logsErr?.message); return; }
       setBooks((booksData || []).map(normalizeBook));
       setLogs((logsData || []).map(normalizeLog));
+      if (profileData) setProfile(normalizeProfile(profileData));
+      else setShowProfileSetup(true);
       setLoading(false);
     };
     fetchData();
@@ -313,8 +324,26 @@ export default function App() {
 
   const logout = async () => {
     await supabase.auth.signOut();
-    setBooks([]); setLogs([]);
+    setBooks([]); setLogs([]); setProfile(null);
     showToast("👋 Sesión cerrada");
+  };
+
+  const saveProfile = async (data) => {
+    const payload = {
+      id: session.user.id,
+      username: data.username,
+      full_name: data.fullName || null,
+      avatar_url: data.avatarUrl || null,
+      bio: data.bio || null,
+    };
+    const { error } = profile
+      ? await supabase.from("profiles").update(payload).eq("id", session.user.id)
+      : await supabase.from("profiles").insert(payload);
+    if (error) { showToast("❌ " + (error.message.includes("unique") ? "Ese username ya existe" : "Error al guardar")); return false; }
+    setProfile(normalizeProfile(payload));
+    setShowProfileSetup(false);
+    showToast("✅ Perfil guardado");
+    return true;
   };
 
   // ── CRUD — all writes include user_id automatically via RLS ──
@@ -523,6 +552,7 @@ export default function App() {
         <div className="nav-logo">Libros<span>.</span></div>
         <div className="nav-actions">
           <button className={`nav-btn ${adminMode?"active":""}`} onClick={()=>setAdminMode(v=>!v)} title="Admin">⚙️</button>
+          <button className="nav-btn" onClick={()=>setShowProfile(true)} title="Mi perfil">👤</button>
           <button className="nav-btn" onClick={logout} title="Cerrar sesión">🚪</button>
         </div>
       </div>
@@ -642,6 +672,8 @@ export default function App() {
         <button className="btn btn-secondary btn-sm" style={{borderRadius:"20px",width:"auto",boxShadow:"var(--shadow-md)"}} onClick={()=>setModal("addBook")}>+ Libro</button>
       </div>
 
+      {showProfileSetup&&<ProfileSetupModal profile={profile} onSave={saveProfile} onClose={()=>profile&&setShowProfileSetup(false)} required={!profile}/>}
+      {showProfile&&<ProfileModal profile={profile} books={books} logs={logs} onEdit={()=>{setShowProfile(false);setShowProfileSetup(true);}} onClose={()=>setShowProfile(false)}/>}
       {modal==="addBook"&&<AddBookModal onSave={addBook} onClose={()=>setModal(null)}/>}
       {modal==="editBook"&&<AddBookModal book={editTarget} onSave={(b)=>updateBook(editTarget.id,b)} onClose={()=>setModal(null)} edit/>}
       {modal==="addLog"&&<AddLogModal books={books} preBookId={editTarget?.bookId} logs={logs} warnLog={warnLog} onConfirmWarn={()=>addLog(warnLog)} onCancelWarn={()=>setWarnLog(null)} onSave={addLog} onClose={()=>{setModal(null);setWarnLog(null);setEditTarget(null);}}/>}
@@ -805,6 +837,166 @@ function ActivityGrid({ logs }) {
         <span style={{fontSize:"9px",color:"var(--text3)"}}>Sin lectura</span>
         <div style={{width:"10px",height:"10px",borderRadius:"2px",background:"var(--accent)",marginLeft:"6px"}}/>
         <span style={{fontSize:"9px",color:"var(--text3)"}}>Leí</span>
+      </div>
+    </div>
+  );
+}
+
+
+// ─── Profile Setup Modal ──────────────────────────────────────────────────────
+function ProfileSetupModal({ profile, onSave, onClose, required }) {
+  const [username, setUsername] = useState(profile?.username || "");
+  const [fullName, setFullName] = useState(profile?.fullName || "");
+  const [bio, setBio] = useState(profile?.bio || "");
+  const [avatar, setAvatar] = useState(profile?.avatarUrl || null);
+  const [saving, setSaving] = useState(false);
+
+  const handleAvatar = (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    const r = new FileReader(); r.onload = (ev) => setAvatar(ev.target.result); r.readAsDataURL(f);
+  };
+
+  const submit = async () => {
+    if (!username.trim()) return;
+    setSaving(true);
+    await onSave({ username: username.trim().toLowerCase().replace(/[^a-z0-9_]/g,""), fullName, bio, avatarUrl: avatar });
+    setSaving(false);
+  };
+
+  const cleanUsername = username.trim().toLowerCase().replace(/[^a-z0-9_]/g,"");
+
+  return (
+    <div className="modal-overlay" onClick={e => !required && e.target===e.currentTarget && onClose()}>
+      <div className="modal">
+        <div className="modal-handle"/>
+        <div className="modal-title">{profile ? "Editar perfil" : "Creá tu perfil"}</div>
+        {!profile && <div style={{fontSize:"13px",color:"var(--text3)"}}>Antes de continuar, elegí un nombre de usuario para que tus amigos te puedan encontrar.</div>}
+
+        <div style={{display:"flex",gap:"14px",alignItems:"flex-start"}}>
+          <label className="cover-upload">
+            {avatar
+              ? <img src={avatar} alt="" style={{width:"100%",height:"100%",objectFit:"cover",borderRadius:"8px"}}/>
+              : <><span>👤</span><small>Foto</small></>}
+            <input type="file" accept="image/*" onChange={handleAvatar}/>
+          </label>
+          <div style={{flex:1,display:"flex",flexDirection:"column",gap:"12px"}}>
+            <div className="form-group">
+              <label className="form-label">Username <span style={{color:"var(--danger)"}}>*</span></label>
+              <input className="form-input" value={username} onChange={e=>setUsername(e.target.value)} placeholder="ej. santiago_lee" autoFocus/>
+              {username && cleanUsername !== username.trim() && <div style={{fontSize:"11px",color:"var(--text3)"}}>Va a quedar: @{cleanUsername}</div>}
+            </div>
+            <div className="form-group">
+              <label className="form-label">Nombre</label>
+              <input className="form-input" value={fullName} onChange={e=>setFullName(e.target.value)} placeholder="Tu nombre"/>
+            </div>
+          </div>
+        </div>
+
+        <div className="form-group">
+          <label className="form-label">Bio <span style={{color:"var(--text3)",textTransform:"none",letterSpacing:0,fontWeight:400}}>(opcional)</span></label>
+          <input className="form-input" value={bio} onChange={e=>setBio(e.target.value)} placeholder="Lector compulsivo de fantasía..."/>
+        </div>
+
+        <button className="btn btn-primary" onClick={submit} disabled={!cleanUsername||saving}>
+          {saving ? "Guardando..." : profile ? "Guardar cambios" : "Crear perfil"}
+        </button>
+        {!required && <button className="btn btn-ghost" onClick={onClose}>Cancelar</button>}
+      </div>
+    </div>
+  );
+}
+
+// ─── Profile Modal ────────────────────────────────────────────────────────────
+function ProfileModal({ profile, books, logs, onEdit, onClose }) {
+  const finished = books.filter(b => b.status === "done");
+  const inProgress = books.filter(b => b.status === "progress");
+  const streak = (() => {
+    if (!logs.length) return { current: 0, best: 0 };
+    const dates = [...new Set(logs.map(l => l.date))].sort();
+    let best = 1, cur = 1;
+    for (let i = 1; i < dates.length; i++) {
+      const diff = (new Date(dates[i]) - new Date(dates[i-1])) / 86400000;
+      if (diff === 1) { cur++; if (cur > best) best = cur; } else cur = 1;
+    }
+    const today = new Date().toISOString().slice(0,10);
+    if ((new Date(today) - new Date(dates[dates.length-1])) / 86400000 > 1) cur = 0;
+    return { current: cur, best };
+  })();
+
+  return (
+    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" style={{paddingBottom:"32px"}}>
+        <div className="modal-handle"/>
+
+        {/* Header */}
+        <div style={{display:"flex",gap:"16px",alignItems:"center"}}>
+          <div style={{width:"64px",height:"64px",borderRadius:"50%",overflow:"hidden",background:"var(--surface2)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"28px",flexShrink:0}}>
+            {profile?.avatarUrl ? <img src={profile.avatarUrl} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/> : "👤"}
+          </div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontFamily:"var(--font-display)",fontSize:"20px",fontWeight:500}}>{profile?.fullName || profile?.username}</div>
+            <div style={{fontSize:"13px",color:"var(--text3)"}}>@{profile?.username}</div>
+            {profile?.bio && <div style={{fontSize:"12px",color:"var(--text2)",marginTop:"4px"}}>{profile.bio}</div>}
+          </div>
+          <button className="btn-icon" onClick={onEdit} title="Editar perfil">✏️</button>
+        </div>
+
+        {/* Stats row */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"8px"}}>
+          <div className="stat-card" style={{textAlign:"center",padding:"10px 8px"}}>
+            <div className="stat-value" style={{fontSize:"22px"}}>{finished.length}</div>
+            <div className="stat-label">Leídos</div>
+          </div>
+          <div className="stat-card accent" style={{textAlign:"center",padding:"10px 8px"}}>
+            <div className="stat-value" style={{fontSize:"22px"}}>{streak.current}</div>
+            <div className="stat-label">Racha 🔥</div>
+          </div>
+          <div className="stat-card" style={{textAlign:"center",padding:"10px 8px"}}>
+            <div className="stat-value" style={{fontSize:"22px"}}>{streak.best}</div>
+            <div className="stat-label">Récord ⭐</div>
+          </div>
+        </div>
+
+        {/* Leyendo ahora */}
+        {inProgress.length > 0 && (
+          <div>
+            <div className="section-title" style={{marginBottom:"8px"}}>Leyendo ahora</div>
+            {inProgress.map(book => (
+              <div key={book.id} style={{display:"flex",gap:"10px",alignItems:"center",marginBottom:"8px"}}>
+                <div style={{width:"36px",height:"50px",borderRadius:"6px",overflow:"hidden",background:"var(--surface2)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"16px",flexShrink:0}}>
+                  {book.cover ? <img src={book.cover} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/> : "📖"}
+                </div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:"13px",fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{book.name}</div>
+                  <div className="progress-row" style={{marginTop:"4px"}}>
+                    <div className="progress-bar"><div className="progress-fill" style={{width:`${book.totalPages?Math.min(100,Math.round(((logs.filter(l=>l.bookId===book.id).sort((a,b)=>b.date.localeCompare(a.date))[0]?.page||0)/book.totalPages)*100)):0}%`}}/></div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Libros finalizados */}
+        {finished.length > 0 && (
+          <div>
+            <div className="section-title" style={{marginBottom:"8px"}}>Libros leídos</div>
+            {finished.map(book => (
+              <div key={book.id} style={{display:"flex",gap:"10px",alignItems:"center",padding:"8px 0",borderBottom:"1px solid var(--border)"}}>
+                <div style={{width:"36px",height:"50px",borderRadius:"6px",overflow:"hidden",background:"var(--surface2)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"16px",flexShrink:0}}>
+                  {book.cover ? <img src={book.cover} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/> : "📖"}
+                </div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:"13px",fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{book.name}</div>
+                  {book.rating && <div style={{fontSize:"12px",marginTop:"2px"}}>{"⭐".repeat(book.rating)}</div>}
+                  {book.review && <div style={{fontSize:"11px",color:"var(--text3)",marginTop:"2px",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",fontStyle:"italic"}}>"{book.review}"</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <button className="btn btn-ghost" onClick={onClose}>Cerrar</button>
       </div>
     </div>
   );
