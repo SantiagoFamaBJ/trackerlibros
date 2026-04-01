@@ -17,6 +17,7 @@ const normalizeBook = (b) => ({
   id: b.id, name: b.name, totalPages: b.total_pages,
   cover: b.cover, status: b.status, unit: b.unit || "page",
   finishedAt: b.finished_at, createdAt: b.created_at,
+  rating: b.rating || null, review: b.review || null,
 });
 const normalizeLog = (l) => ({ id: l.id, bookId: l.book_id, date: l.date, page: l.page });
 
@@ -119,6 +120,11 @@ body{background:var(--bg);font-family:var(--font-body);color:var(--text);-webkit
 .book-status{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:500;padding:2px 8px;border-radius:20px}
 .book-status.progress{background:var(--accent-light);color:var(--accent)}
 .book-status.done{background:var(--green-light);color:var(--green)}.book-status.pending{background:var(--surface2);color:var(--text3)}
+.stars{display:flex;gap:3px;align-items:center}
+.star{font-size:20px;cursor:pointer;transition:transform .1s;line-height:1;background:none;border:none;padding:0}
+.star:hover{transform:scale(1.2)}
+.review-box{background:var(--surface2);border-radius:var(--r-sm);padding:12px 14px;font-size:13px;color:var(--text2);line-height:1.5;font-style:italic;border-left:3px solid var(--accent)}
+.rating-display{display:flex;align-items:center;gap:6px}
 .kindle-badge{display:inline-flex;align-items:center;gap:3px;font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px;background:var(--kindle-light);color:var(--kindle)}
 .progress-row{display:flex;align-items:center;gap:8px;margin-top:4px}
 .progress-bar{flex:1;height:4px;background:var(--surface2);border-radius:2px;overflow:hidden}
@@ -333,6 +339,8 @@ export default function App() {
     if (patch.status !== undefined) dbPatch.status = patch.status;
     if (patch.unit !== undefined) dbPatch.unit = patch.unit;
     if (patch.finishedAt !== undefined) dbPatch.finished_at = patch.finishedAt;
+    if (patch.rating !== undefined) dbPatch.rating = patch.rating;
+    if (patch.review !== undefined) dbPatch.review = patch.review;
     const { error } = await supabase.from("books").update(dbPatch).eq("id", id);
     if (error) { showToast("❌ Error al actualizar"); return; }
     setBooks((prev) => prev.map((b) => b.id === id ? { ...b, ...patch } : b));
@@ -498,6 +506,7 @@ export default function App() {
                 </div>
             }
           </div>
+          {book.status==="done" && <RatingSection book={book} onUpdate={updateBook}/>}
           {adminMode && <button className="btn btn-danger btn-sm" onClick={() => { if(confirm("¿Eliminar este libro y todos sus registros?")) deleteBook(book.id); }}>🗑 Eliminar libro</button>}
           <div style={{height:"80px"}}/>
         </div>
@@ -592,7 +601,7 @@ export default function App() {
                   <div className="book-cover">{book.cover?<img src={book.cover} alt=""/>:"📖"}</div>
                   <div className="book-info"><div style={{display:"flex",alignItems:"center",gap:"6px"}}><div className="book-name" style={{flex:1}}>{book.name}</div>{isKindle&&<span className="kindle-badge">📱</span>}</div>
                   <span className="book-status done">✓ Finalizado</span>
-                  <div className="book-meta">{s.days} días · {s.avgPerDay} {unitLabel(book.unit)}/día</div></div>
+                  <div className="book-meta">{s.days} días · {s.avgPerDay} {unitLabel(book.unit)}/día</div>{book.rating&&<div style={{fontSize:"12px",marginTop:"2px"}}>{"⭐".repeat(book.rating)}</div>}</div>
                 </div>;})}
               </>}
             </>
@@ -643,6 +652,67 @@ export default function App() {
 }
 
 // ─── Modals ───────────────────────────────────────────────────────────────────
+
+
+// ─── Rating Section ───────────────────────────────────────────────────────────
+function RatingSection({ book, onUpdate }) {
+  const [editing, setEditing] = useState(false);
+  const [rating, setRating] = useState(book.rating || 0);
+  const [hover, setHover] = useState(0);
+  const [review, setReview] = useState(book.review || "");
+
+  const save = () => {
+    onUpdate(book.id, { rating, review: review.trim() || null });
+    setEditing(false);
+  };
+
+  if (editing) return (
+    <div className="card">
+      <div className="card-title">Tu opinión</div>
+      <div className="form-group">
+        <label className="form-label">Puntaje</label>
+        <div className="stars">
+          {[1,2,3,4,5].map(n => (
+            <button key={n} className="star"
+              onMouseEnter={() => setHover(n)}
+              onMouseLeave={() => setHover(0)}
+              onClick={() => setRating(n)}>
+              {n <= (hover || rating) ? "⭐" : "☆"}
+            </button>
+          ))}
+          {rating > 0 && <span style={{fontSize:"13px",color:"var(--text3)",marginLeft:"4px"}}>{rating}/5</span>}
+        </div>
+      </div>
+      <div className="form-group">
+        <label className="form-label">Reseña <span style={{color:"var(--text3)",textTransform:"none",letterSpacing:0}}>(opcional)</span></label>
+        <textarea className="form-input" rows={3} value={review} onChange={e=>setReview(e.target.value)} placeholder="¿Qué te pareció?" style={{resize:"none",lineHeight:1.5}}/>
+      </div>
+      <button className="btn btn-primary btn-sm" onClick={save}>Guardar</button>
+      <button className="btn btn-ghost" onClick={()=>{setEditing(false);setRating(book.rating||0);setReview(book.review||"");}}>Cancelar</button>
+    </div>
+  );
+
+  // Display mode
+  if (!book.rating && !book.review) return (
+    <div className="card card-sm" style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+      <div style={{fontSize:"13px",color:"var(--text3)"}}>¿Qué te pareció el libro?</div>
+      <button className="btn btn-secondary btn-sm" style={{width:"auto"}} onClick={()=>setEditing(true)}>Calificar</button>
+    </div>
+  );
+
+  return (
+    <div className="card" style={{cursor:"pointer"}} onClick={()=>setEditing(true)}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom: book.review ? "10px" : "0"}}>
+        <div className="rating-display">
+          <div className="stars">{[1,2,3,4,5].map(n=><span key={n} style={{fontSize:"16px"}}>{n<=book.rating?"⭐":"☆"}</span>)}</div>
+          <span style={{fontSize:"12px",color:"var(--text3)"}}>{book.rating}/5</span>
+        </div>
+        <span style={{fontSize:"11px",color:"var(--text3)"}}>Editar</span>
+      </div>
+      {book.review && <div className="review-box">{book.review}</div>}
+    </div>
+  );
+}
 
 // ─── Activity Grid ────────────────────────────────────────────────────────────
 function ActivityGrid({ logs }) {
