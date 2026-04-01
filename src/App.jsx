@@ -277,7 +277,10 @@ export default function App() {
   const [session, setSession] = useState(undefined);
   const [profile, setProfile] = useState(null);
   const [showProfileSetup, setShowProfileSetup] = useState(false);
-  const [showProfile, setShowProfile] = useState(false); // undefined = loading, null = no session
+  const [showProfile, setShowProfile] = useState(false);
+  const [friendships, setFriendships] = useState([]);
+  const [friendProfiles, setFriendProfiles] = useState([]);
+  const [viewingFriend, setViewingFriend] = useState(null); // undefined = loading, null = no session
   const [books, setBooks] = useState([]);
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -312,6 +315,24 @@ export default function App() {
       setLogs((logsData || []).map(normalizeLog));
       if (profileData) setProfile(normalizeProfile(profileData));
       else setShowProfileSetup(true);
+
+      // Load friendships
+      const { data: friendshipsData } = await supabase
+        .from("friendships")
+        .select("*")
+        .or(`requester_id.eq.${session.user.id},addressee_id.eq.${session.user.id}`);
+      if (friendshipsData) {
+        setFriendships(friendshipsData);
+        // Load friend profiles
+        const accepted = friendshipsData.filter(f => f.status === "accepted");
+        const friendIds = accepted.map(f =>
+          f.requester_id === session.user.id ? f.addressee_id : f.requester_id
+        );
+        if (friendIds.length) {
+          const { data: fp } = await supabase.from("profiles").select("*").in("id", friendIds);
+          if (fp) setFriendProfiles(fp.map(normalizeProfile));
+        }
+      }
       setLoading(false);
     };
     fetchData();
@@ -347,6 +368,33 @@ export default function App() {
   };
 
   // ── CRUD — all writes include user_id automatically via RLS ──
+  // ── Friends ──
+  const sendFriendRequest = async (addresseeId) => {
+    const { error } = await supabase.from("friendships").insert({
+      requester_id: session.user.id, addressee_id: addresseeId, status: "pending"
+    });
+    if (error) { showToast("❌ Error al enviar solicitud"); return; }
+    setFriendships(prev => [...prev, { requester_id: session.user.id, addressee_id: addresseeId, status: "pending" }]);
+    showToast("✅ Solicitud enviada");
+  };
+
+  const acceptFriendRequest = async (friendship) => {
+    const { error } = await supabase.from("friendships").update({ status: "accepted" }).eq("id", friendship.id);
+    if (error) { showToast("❌ Error"); return; }
+    setFriendships(prev => prev.map(f => f.id === friendship.id ? { ...f, status: "accepted" } : f));
+    // Load new friend's profile
+    const { data: fp } = await supabase.from("profiles").select("*").eq("id", friendship.requester_id).single();
+    if (fp) setFriendProfiles(prev => [...prev, normalizeProfile(fp)]);
+    showToast("🎉 ¡Ahora son amigos!");
+  };
+
+  const removeFriend = async (friendshipId) => {
+    const { error } = await supabase.from("friendships").delete().eq("id", friendshipId);
+    if (error) { showToast("❌ Error"); return; }
+    setFriendships(prev => prev.filter(f => f.id !== friendshipId));
+    showToast("👋 Amistad eliminada");
+  };
+
   const addBook = async (book) => {
     const newBook = {
       id: uid(), name: book.name, total_pages: book.totalPages,
@@ -557,7 +605,7 @@ export default function App() {
         </div>
       </div>
       <div className="tab-bar">
-        {[["home","Inicio"],["books","Biblioteca"],["stats","Estadísticas"]].map(([id,label])=>(
+        {[["home","Inicio"],["books","Biblioteca"],["stats","Estadísticas"],["friends","Amigos"]].map(([id,label])=>(
           <button key={id} className={`tab ${tab===id?"active":""}`} onClick={()=>setTab(id)}>{label}</button>
         ))}
       </div>
@@ -665,6 +713,27 @@ export default function App() {
           </>}
           <div style={{height:"80px"}}/>
         </div>
+      )}
+
+      {tab==="friends" && (
+        <FriendsTab
+          session={session}
+          profile={profile}
+          friendships={friendships}
+          friendProfiles={friendProfiles}
+          onSendRequest={sendFriendRequest}
+          onAccept={acceptFriendRequest}
+          onRemove={removeFriend}
+          onViewFriend={setViewingFriend}
+        />
+      )}
+
+      {viewingFriend && (
+        <FriendProfileModal
+          friend={viewingFriend}
+          onClose={()=>setViewingFriend(null)}
+          session={session}
+        />
       )}
 
       <button className="fab" onClick={()=>{setEditTarget(null);setModal("addLog");}}>+</button>
@@ -842,6 +911,272 @@ function ActivityGrid({ logs }) {
   );
 }
 
+
+
+// ─── Friends Tab ──────────────────────────────────────────────────────────────
+function FriendsTab({ session, profile, friendships, friendProfiles, onSendRequest, onAccept, onRemove, onViewFriend }) {
+  const [search, setSearch] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [searched, setSearched] = useState(false);
+
+  const accepted = friendships.filter(f => f.status === "accepted");
+  const incoming = friendships.filter(f => f.status === "pending" && f.addressee_id === session.user.id);
+  const outgoing = friendships.filter(f => f.status === "pending" && f.requester_id === session.user.id);
+
+  const doSearch = async () => {
+    if (!search.trim()) return;
+    setSearching(true); setSearched(true);
+    const q = search.trim().toLowerCase();
+    const { data } = await supabase.from("profiles").select("*")
+      .or(`username.ilike.%${q}%,full_name.ilike.%${q}%`)
+      .neq("id", session.user.id)
+      .limit(10);
+    setSearchResults((data || []).map(p => ({
+      id: p.id, username: p.username, fullName: p.full_name, avatarUrl: p.avatar_url,
+    })));
+    setSearching(false);
+  };
+
+  const getFriendshipWith = (userId) => friendships.find(f =>
+    (f.requester_id === session.user.id && f.addressee_id === userId) ||
+    (f.addressee_id === session.user.id && f.requester_id === userId)
+  );
+
+  const getFriendProfile = (friendship) => {
+    const friendId = friendship.requester_id === session.user.id ? friendship.addressee_id : friendship.requester_id;
+    return friendProfiles.find(p => p.id === friendId);
+  };
+
+  return (
+    <div className="content">
+      {/* Incoming requests */}
+      {incoming.length > 0 && (
+        <div>
+          <div className="section-header"><span className="section-title">Solicitudes recibidas ({incoming.length})</span></div>
+          {incoming.map(f => {
+            const fp = friendProfiles.find(p => p.id === f.requester_id);
+            return (
+              <div key={f.id} className="card card-sm" style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"8px"}}>
+                <div style={{width:"40px",height:"40px",borderRadius:"50%",overflow:"hidden",background:"var(--surface2)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"18px",flexShrink:0}}>
+                  {fp?.avatarUrl ? <img src={fp.avatarUrl} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/> : "👤"}
+                </div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:"14px",fontWeight:500}}>{fp?.fullName || fp?.username || "Usuario"}</div>
+                  <div style={{fontSize:"12px",color:"var(--text3)"}}>@{fp?.username || "..."}</div>
+                </div>
+                <button className="btn btn-primary btn-sm" style={{width:"auto"}} onClick={()=>onAccept(f)}>Aceptar</button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Search */}
+      <div>
+        <div className="section-header"><span className="section-title">Buscar amigos</span></div>
+        <div style={{display:"flex",gap:"8px"}}>
+          <input className="form-input" placeholder="Username o nombre..." value={search}
+            onChange={e=>setSearch(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&doSearch()}
+            style={{flex:1}}/>
+          <button className="btn btn-primary btn-sm" style={{width:"auto",padding:"0 16px"}} onClick={doSearch} disabled={searching}>
+            {searching ? "..." : "Buscar"}
+          </button>
+        </div>
+        {searched && (
+          <div className="card" style={{padding:"8px 0",marginTop:"8px"}}>
+            {searchResults.length === 0
+              ? <div style={{padding:"12px 16px",fontSize:"13px",color:"var(--text3)"}}>Sin resultados</div>
+              : searchResults.map(p => {
+                  const fs = getFriendshipWith(p.id);
+                  return (
+                    <div key={p.id} style={{display:"flex",alignItems:"center",gap:"12px",padding:"10px 16px",borderBottom:"1px solid var(--border)"}}>
+                      <div style={{width:"36px",height:"36px",borderRadius:"50%",overflow:"hidden",background:"var(--surface2)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"16px",flexShrink:0}}>
+                        {p.avatarUrl ? <img src={p.avatarUrl} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/> : "👤"}
+                      </div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:"13px",fontWeight:500}}>{p.fullName || p.username}</div>
+                        <div style={{fontSize:"11px",color:"var(--text3)"}}>@{p.username}</div>
+                      </div>
+                      {!fs && <button className="btn btn-secondary btn-sm" style={{width:"auto"}} onClick={()=>onSendRequest(p.id)}>+ Agregar</button>}
+                      {fs?.status==="pending" && fs.requester_id===session.user.id && <span style={{fontSize:"12px",color:"var(--text3)"}}>Pendiente</span>}
+                      {fs?.status==="accepted" && <span style={{fontSize:"12px",color:"var(--green)"}}>✓ Amigos</span>}
+                    </div>
+                  );
+                })
+            }
+          </div>
+        )}
+      </div>
+
+      {/* Friends list */}
+      <div>
+        <div className="section-header"><span className="section-title">Mis amigos ({accepted.length})</span></div>
+        {accepted.length === 0
+          ? <div className="empty"><div className="empty-icon">🤝</div><div className="empty-title">Sin amigos aún</div><div className="empty-sub">Buscá a alguien por username o nombre</div></div>
+          : accepted.map(f => {
+              const fp = getFriendProfile(f);
+              return (
+                <div key={f.id} className="card card-sm" style={{display:"flex",alignItems:"center",gap:"12px",marginBottom:"8px",cursor:"pointer"}} onClick={()=>fp&&onViewFriend(fp)}>
+                  <div style={{width:"44px",height:"44px",borderRadius:"50%",overflow:"hidden",background:"var(--surface2)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"20px",flexShrink:0}}>
+                    {fp?.avatarUrl ? <img src={fp.avatarUrl} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/> : "👤"}
+                  </div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:"14px",fontWeight:500}}>{fp?.fullName || fp?.username || "..."}</div>
+                    <div style={{fontSize:"12px",color:"var(--text3)"}}>@{fp?.username || "..."}</div>
+                  </div>
+                  <button className="btn-icon danger" onClick={e=>{e.stopPropagation();if(confirm("¿Eliminar esta amistad?"))onRemove(f.id);}}>🗑</button>
+                </div>
+              );
+            })
+        }
+      </div>
+
+      {/* Outgoing pending */}
+      {outgoing.length > 0 && (
+        <div>
+          <div className="section-header"><span className="section-title">Solicitudes enviadas</span></div>
+          {outgoing.map(f => (
+            <div key={f.id} className="card card-sm" style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:"8px"}}>
+              <span style={{fontSize:"13px",color:"var(--text3)"}}>Solicitud pendiente</span>
+              <button className="btn-icon danger" onClick={()=>onRemove(f.id)}>✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{height:"80px"}}/>
+    </div>
+  );
+}
+
+// ─── Friend Profile Modal ─────────────────────────────────────────────────────
+function FriendProfileModal({ friend, onClose, session }) {
+  const [books, setBooks] = useState([]);
+  const [logs, setLogs] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const load = async () => {
+      const [{ data: booksData }, { data: logsData }] = await Promise.all([
+        supabase.from("books").select("*").eq("user_id", friend.id),
+        supabase.from("logs").select("*").eq("user_id", friend.id),
+      ]);
+      setBooks((booksData || []).map(b => ({
+        id: b.id, name: b.name, totalPages: b.total_pages, cover: b.cover,
+        status: b.status, unit: b.unit || "page",
+        finishedAt: b.finished_at, rating: b.rating, review: b.review,
+      })));
+      setLogs((logsData || []).map(l => ({ id: l.id, bookId: l.book_id, date: l.date, page: l.page })));
+      setLoading(false);
+    };
+    load();
+  }, [friend.id]);
+
+  const finished = books.filter(b => b.status === "done");
+  const inProgress = books.filter(b => b.status === "progress");
+
+  const streak = (() => {
+    if (!logs.length) return { current: 0, best: 0 };
+    const dates = [...new Set(logs.map(l => l.date))].sort();
+    let best = 1, cur = 1;
+    for (let i = 1; i < dates.length; i++) {
+      const diff = (new Date(dates[i]) - new Date(dates[i-1])) / 86400000;
+      if (diff === 1) { cur++; if (cur > best) best = cur; } else cur = 1;
+    }
+    const today = new Date().toISOString().slice(0,10);
+    if ((new Date(today) - new Date(dates[dates.length-1])) / 86400000 > 1) cur = 0;
+    return { current: cur, best };
+  })();
+
+  return (
+    <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="modal" style={{paddingBottom:"32px"}}>
+        <div className="modal-handle"/>
+
+        {/* Header */}
+        <div style={{display:"flex",gap:"16px",alignItems:"center"}}>
+          <div style={{width:"64px",height:"64px",borderRadius:"50%",overflow:"hidden",background:"var(--surface2)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"28px",flexShrink:0}}>
+            {friend.avatarUrl ? <img src={friend.avatarUrl} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/> : "👤"}
+          </div>
+          <div style={{flex:1}}>
+            <div style={{fontFamily:"var(--font-display)",fontSize:"20px",fontWeight:500}}>{friend.fullName || friend.username}</div>
+            <div style={{fontSize:"13px",color:"var(--text3)"}}>@{friend.username}</div>
+            {friend.bio && <div style={{fontSize:"12px",color:"var(--text2)",marginTop:"4px"}}>{friend.bio}</div>}
+          </div>
+        </div>
+
+        {loading ? <div style={{textAlign:"center",padding:"24px",color:"var(--text3)"}}>Cargando...</div> : <>
+          {/* Stats */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:"8px"}}>
+            <div className="stat-card" style={{textAlign:"center",padding:"10px 8px"}}>
+              <div className="stat-value" style={{fontSize:"22px"}}>{finished.length}</div>
+              <div className="stat-label">Leídos</div>
+            </div>
+            <div className="stat-card accent" style={{textAlign:"center",padding:"10px 8px"}}>
+              <div className="stat-value" style={{fontSize:"22px"}}>{streak.current}</div>
+              <div className="stat-label">Racha 🔥</div>
+            </div>
+            <div className="stat-card" style={{textAlign:"center",padding:"10px 8px"}}>
+              <div className="stat-value" style={{fontSize:"22px"}}>{streak.best}</div>
+              <div className="stat-label">Récord ⭐</div>
+            </div>
+          </div>
+
+          {/* Leyendo ahora */}
+          {inProgress.length > 0 && (
+            <div>
+              <div className="section-title" style={{marginBottom:"8px"}}>Leyendo ahora 📖</div>
+              {inProgress.map(book => {
+                const lastLog = logs.filter(l=>l.bookId===book.id).sort((a,b)=>b.date.localeCompare(a.date))[0];
+                const pct = book.totalPages && lastLog ? Math.min(100,Math.round((lastLog.page/book.totalPages)*100)) : 0;
+                return (
+                  <div key={book.id} style={{display:"flex",gap:"10px",alignItems:"center",marginBottom:"8px"}}>
+                    <div style={{width:"36px",height:"50px",borderRadius:"6px",overflow:"hidden",background:"var(--surface2)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"16px",flexShrink:0}}>
+                      {book.cover ? <img src={book.cover} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/> : "📖"}
+                    </div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:"13px",fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{book.name}</div>
+                      <div className="progress-row" style={{marginTop:"4px"}}>
+                        <div className="progress-bar"><div className="progress-fill" style={{width:`${pct}%`}}/></div>
+                        <span style={{fontSize:"11px",color:"var(--accent)",fontWeight:500}}>{pct}%</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Libros finalizados */}
+          {finished.length > 0 && (
+            <div>
+              <div className="section-title" style={{marginBottom:"8px"}}>Libros leídos</div>
+              {finished.map(book => (
+                <div key={book.id} style={{display:"flex",gap:"10px",alignItems:"center",padding:"8px 0",borderBottom:"1px solid var(--border)"}}>
+                  <div style={{width:"36px",height:"50px",borderRadius:"6px",overflow:"hidden",background:"var(--surface2)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:"16px",flexShrink:0}}>
+                    {book.cover ? <img src={book.cover} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/> : "📖"}
+                  </div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:"13px",fontWeight:500,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{book.name}</div>
+                    {book.rating && <div style={{fontSize:"12px",marginTop:"2px"}}>{"⭐".repeat(book.rating)}</div>}
+                    {book.review && <div style={{fontSize:"11px",color:"var(--text3)",marginTop:"2px",fontStyle:"italic",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>"{book.review}"</div>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {finished.length === 0 && inProgress.length === 0 && (
+            <div style={{textAlign:"center",padding:"24px",color:"var(--text3)",fontSize:"13px"}}>Todavía no hay actividad</div>
+          )}
+        </>}
+
+        <button className="btn btn-ghost" onClick={onClose}>Cerrar</button>
+      </div>
+    </div>
+  );
+}
 
 // ─── Profile Setup Modal ──────────────────────────────────────────────────────
 function ProfileSetupModal({ profile, onSave, onClose, required }) {
